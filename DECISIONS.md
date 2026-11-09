@@ -11,7 +11,9 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K3 | Aturan pengajuan minimal 3 hari kerja | **Diputuskan** | 2026-11-05 |
 | K4 | Target dan jadwal pengerjaan | **Diputuskan** | 2026-11-06 |
 | K5 | Kredensial model | Selesai | 2026-11-06 |
-| K6 | Setup Docker ditunda ke Tahap 4 | **Diputuskan** | 2026-11-05 |
+| K6 | Setup Docker ditunda ke Tahap 4 | Digantikan K7 | 2026-11-06 |
+| K7 | Urutan kerja mengikuti `lab.md` | **Diputuskan** | 2026-11-06 |
+| K8 | Saldo efektif saat validasi cuti | **Diputuskan** | 2026-11-09 |
 
 Status yang dipakai:
 
@@ -19,6 +21,7 @@ Status yang dipakai:
 - **Menunggu instruktur:** ada rencana sementara, tetapi jawaban instruktur bisa mengubahnya.
 - **Asumsi sementara:** dipakai untuk merencanakan sampai ada informasi yang pasti.
 - **Selesai:** masalahnya sudah tidak ada.
+- **Digantikan:** tidak berlaku lagi, tetapi tetap disimpan sebagai riwayat.
 
 ## K1 — Tanggal `leave-valid-008` sudah lewat
 
@@ -105,7 +108,7 @@ Status yang dipakai:
 
 **Risiko:** Bisa bertabrakan dengan hidden test yang memakai cuti tahunan kurang dari tiga hari kerja sebelum tanggal mulai. Mitigasinya, beri tahu instruktur.
 
-**Bukti pelaksanaan:** Belum ada. Test baru direncanakan di Tahap 1.
+**Bukti pelaksanaan:** Belum ada. Test baru direncanakan di Step 5.
 
 ## K4 — Target dan jadwal pengerjaan
 
@@ -113,11 +116,11 @@ Status yang dipakai:
 
 **Temuan:** Deadline pengumpulan adalah 20 November 2026. Waktu yang tersedia sampai 13 November adalah 3 jam pada Senin 9 November dan sekitar 2 jam per hari pada 10–13 November, total sekitar 11 jam.
 
-**Keputusan:** Pada 13 November, sistem utuh ditargetkan berjalan di Docker dengan model asli dan evaluator versi awal. Perbaikan evaluasi dilanjutkan 14–15 November. Waktu 16–19 November dipakai untuk review dan latihan presentasi Bahasa Inggris.
+**Keputusan:** Pada 13 November, chat dan saldo ditargetkan berjalan lewat Streamlit dengan PostgreSQL dan model asli. Seluruh sistem ditargetkan selesai 15 November. Waktu 16–19 November dipakai untuk cadangan, review, dan latihan presentasi Bahasa Inggris.
 
-**Alasan:** Sistem yang sudah berjalan utuh lebih dulu membuat sisa waktu bisa dipakai untuk memperbaiki hasil nyata. Jarak sampai deadline juga menjadi cadangan jika target meleset.
+**Alasan:** Urutan `lab.md` menaruh evaluasi dan Docker di akhir, jadi keduanya tidak realistis selesai pada 13 November (lihat K7). Jarak sampai deadline menjadi cadangan jika target meleset.
 
-**Risiko:** Sisa kerja juga diperkirakan sekitar 11 jam, jadi jadwal ini tidak punya cadangan. Angka ini perkiraan dari roadmap. Jika meleset, 14–15 November dipakai lebih dulu, lalu waktu latihan berkurang.
+**Risiko:** Durasi tiap step masih perkiraan, dan jadwal 14–15 November padat. Jika meleset, 16–17 November dipakai lebih dulu, lalu waktu latihan berkurang.
 
 ## K5 — Kredensial model
 
@@ -125,13 +128,13 @@ Status yang dipakai:
 
 **Temuan:** API key dan nama model sudah dimiliki, tetapi file `.env` belum dibuat.
 
-**Keputusan:** `.env` diisi saat Tahap 4. Sampai Tahap 3, kode memakai `DeterministicProvider`.
+**Keputusan:** `AGENT_MODEL` dan `EMBEDDING_MODEL` dilengkapi di Step 3, sebelum indexing.
 
-**Risiko:** Mengisi `.env` saja tidak cukup. `OpenAIProvider` tetap harus ditulis, dan kualitas retrieval serta perilaku model asli baru bisa diuji setelah tersambung. Waktunya sudah dijadwalkan di Tahap 4–5.
+**Risiko:** Mengisi `.env` saja tidak cukup. `OpenAIProvider` tetap harus ditulis, dan kualitas retrieval serta perilaku model asli baru bisa diuji setelah tersambung. Waktunya sudah dijadwalkan di Step 3 dan Step 6.
 
 ## K6 — Setup Docker ditunda ke Tahap 4
 
-**Status:** Diputuskan
+**Status:** Digantikan K7. Label Tahap di entri ini mengacu ke rencana lama.
 
 **Temuan:** Plan awal menyiapkan Docker, PostgreSQL, Redis, dan `.env` di Tahap 1, padahal test Tahap 1–3 memakai `MemoryRepository`, `NullCache`, dan model tiruan.
 
@@ -150,6 +153,70 @@ Status yang dipakai:
 **Alasan:** Test sudah memberi umpan balik tanpa infrastruktur. Docker baru dibutuhkan saat kode mulai memakai database, tetapi tetap cukup awal untuk diperbaiki sebelum deadline.
 
 **Risiko:** Masalah Docker baru terlihat di Tahap 4. Mitigasinya, uji pengiriman Docker tetap dijadwalkan di Tahap 5, bukan Tahap 7.
+
+**Pembaruan (6 Nov 2026):** Docker Desktop, PostgreSQL, dan Redis ternyata siap lebih awal. `.env` belum lengkap, karena `AGENT_MODEL` dan `EMBEDDING_MODEL` masih kosong.
+
+## K7 — Urutan kerja mengikuti `lab.md`
+
+**Status:** Diputuskan
+
+**Temuan:** `lab.md` memulai implementasi dari database dan seed. Rencana sebelumnya memulai dari `domain.py`, `security.py`, dan `MemoryRepository`.
+
+**Bukti:**
+
+- [lab.md:96](lab.md:96)
+- [src/repository.py:1](src/repository.py:1)
+- [tests/conftest.py:19-63](tests/conftest.py:19)
+
+**Opsi:**
+
+| Opsi | Kelebihan | Kekurangan |
+|---|---|---|
+| Inti logika lebih dulu | Test langsung memberi umpan balik, dan desain tabel lebih jelas | Berbeda dari urutan lab, dan database baru disentuh belakangan |
+| Mengikuti `lab.md` | Sesuai checkpoint mentor, dan bekerja dengan data sungguhan dari awal | Sebagian kerja awal belum punya test otomatis, dan alur utuh baru terlihat belakangan |
+
+**Keputusan:** Urutan kerja mengikuti Step 1–11 di `lab.md`.
+
+**Alasan:** Ini jalur yang dirancang mentor, dan checkpoint-nya bisa langsung dipakai sebagai ukuran progres. Docker juga sudah siap, jadi tidak ada hambatan untuk mulai dari database.
+
+**Risiko:**
+
+- Step 2–4 lebih banyak diverifikasi manual, jadi perlu perintah pengecekan sendiri.
+- `MemoryRepository` tetap wajib dibuat karena test bergantung padanya.
+- Evaluasi dan Docker baru dikerjakan di akhir, jadi target sistem utuh bergeser dari 13 ke 15 November.
+
+**Pembaruan (6 Nov 2026):** Project brief, ADR, dan diagram juga mengikuti lab, yaitu dikerjakan di Step 1 sebelum database.
+
+## K8 — Saldo efektif saat validasi cuti
+
+**Status:** Diputuskan
+
+**Temuan:** Request yang masih pending tidak mengurangi saldo di database, karena asisten dilarang mengubah saldo. Akibatnya, beberapa request pending bisa melebihi saldo. Contoh: saldo cuti tahunan Alya 8 hari, request A 5 hari masih pending, lalu request B 5 hari tetap lolos karena dicek terhadap 8.
+
+**Bukti:**
+
+- [data/policies/escalation.md:13](data/policies/escalation.md:13)
+- [brief.md:29](brief.md:29)
+
+**Opsi:**
+
+| Opsi | Kelebihan | Kekurangan |
+|---|---|---|
+| Dibiarkan, manajer yang menangkap | Paling sederhana | Pegawai baru tahu salah setelah ditolak |
+| Tool kelima untuk menghitung saldo efektif | Logikanya terlihat jelas sebagai tool | Brief membatasi empat tool, dan model bisa lupa memanggilnya |
+| Hitung saldo efektif di dalam validasi | Selalu berjalan, tidak bergantung pada keputusan model | Validasi butuh data request pending |
+
+**Keputusan:** Saat `prepare_leave_request` memvalidasi, saldo efektif = saldo di database − total hari request `pending_manager_review` dengan tipe cuti yang sama.
+
+- Saldo di database tidak berubah. Ini hanya perhitungan.
+- Request `approved` tidak dihitung, karena sudah mengurangi saldo di sistem HR.
+- Request `cancelled` dan proposal yang belum dikonfirmasi tidak dihitung.
+
+**Alasan:** Pengaman tidak boleh bergantung pada keputusan model. Di dalam validasi, perhitungan ini selalu berjalan setiap kali proposal dibuat, dan tidak menambah tool di luar kontrak brief.
+
+**Cek ulang saat konfirmasi:** Saldo efektif dihitung lagi di dalam transaksi konfirmasi, karena daftar request pending bisa berubah sejak proposal dibuat. Tanpa ini, dua proposal yang dibuat sebelum salah satunya dikonfirmasi tetap bisa sama-sama lolos.
+
+**Tampilan saldo:** `get_my_leave_balance` mengembalikan saldo di database, total hari pending, dan saldo efektif per tipe cuti. Rincian ini membuat agent bisa menjelaskan kenapa saldo yang bisa diajukan lebih kecil, misalnya “8 hari, 5 hari sedang menunggu manajer, jadi bisa diajukan 3 hari.” Kontrak `LeaveBalance` di `src/contracts.py` tidak diubah, karena hasil tool tidak harus memakai model itu.
 
 ## Temuan kecil
 
