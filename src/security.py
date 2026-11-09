@@ -1,10 +1,12 @@
 """Security helpers. Complete every TODO before persisting telemetry."""
 from __future__ import annotations
 
+import hashlib
+
 
 def token_hash(token: str) -> str:
-    # TODO(M2): Return a deterministic SHA-256 hex digest; never store the raw token.
-    raise NotImplementedError
+    """Return a deterministic SHA-256 hex digest so the raw token is never stored."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def stable_safety_id(employee_id: str) -> str:

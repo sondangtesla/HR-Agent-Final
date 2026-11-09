@@ -8,7 +8,7 @@ Urutan kerja mengikuti Step 1–11 di [lab.md](lab.md) (keputusan K7).
 - **Target internal:** chat dan saldo berjalan lewat Streamlit pada 13 November; seluruh sistem selesai pada 15 November 2026.
 - **Deadline pengumpulan:** 20 November 2026.
 - **Status saat ini:** Step 1 selesai (Checkpoint 1), kecuali peta failure yang ditunda. Implementasi belum dimulai.
-- **Task berikutnya:** `token_hash` di `src/security.py` (Step 2).
+- **Task berikutnya:** seed idempotent dan `--reset` di `src/setup_lab.py` (Step 2).
 
 ## Target rilis
 
@@ -87,9 +87,9 @@ Jika Step 1 sudah selesai saat akhir pekan, waktu sisanya dipakai untuk `Postgre
 
 ## Step 2 — Database dan seed
 
-- [ ] **`token_hash` di `src/security.py`.** Done when: token yang sama selalu menghasilkan SHA-256 hex yang sama.
-- [ ] **Schema di `src/setup_lab.py`.** Done when: extension `vector` aktif; tabel employee, balance, request, proposal, ticket, policy chunk, dan trace terbentuk; status ber-constraint.
-- [ ] **Seed idempotent.** Done when: `python -m src.setup_lab` dua kali tidak menduplikasi data, dan `--reset` tersedia. Token tersimpan sebagai hash.
+- [x] **`token_hash` di `src/security.py`.** Done when: token yang sama selalu menghasilkan SHA-256 hex yang sama. Terbukti: dua proses terpisah menghasilkan hash 64 karakter yang sama.
+- [x] **Schema di `src/setup_lab.py`.** Done when: extension `vector` aktif; tabel employee, balance, request, proposal, ticket, policy chunk, dan trace terbentuk; status ber-constraint. Terbukti 9 Nov: 7 tabel + `vector` 0.8.7, dijalankan 2x tanpa error, 9 uji constraint K9 sesuai harapan.
+- [ ] **Seed idempotent.** Done when: `python -m src.setup_lab` dua kali tidak menduplikasi data, dan `--reset` tersedia. Token tersimpan sebagai hash. `--reset` menghapus lalu membuat ulang semua tabel, karena `IF NOT EXISTS` tidak mengubah tabel lama (T6). Data historis memakai `status_set_by = 'seed'` (K9).
 - [ ] **`PostgresRepository` dasar.** Done when: pool, `health`, `authenticate`, dan `get_balances` bekerja tanpa interpolasi input ke SQL.
 
 Pertanyaan pemandu:
@@ -103,7 +103,7 @@ Pertanyaan pemandu:
 - [ ] **Lengkapi `.env`.** Done when: `AGENT_MODEL` dan `EMBEDDING_MODEL` terisi, dan `EMBEDDING_DIMENSIONS` sesuai model.
 - [ ] **`chunk_policy`.** Done when: `test_policy_chunk_ids_and_metadata_are_stable` hijau.
 - [ ] **`embed` di `OpenAIProvider`.** Done when: embedding batch berjalan dan dimensi divalidasi sebelum insert.
-- [ ] **Indexing di seed.** Done when: semua chunk tersimpan dengan document ID, section, version, effective date, dan vector.
+- [ ] **Indexing di seed.** Done when: semua chunk tersimpan dengan document ID, section, version, effective date, dan vector. Vector dikirim sebagai teks lalu di-cast ke `vector`, karena package `pgvector` tidak ada (T8).
 
 Pertanyaan pemandu:
 
@@ -135,6 +135,7 @@ Pertanyaan pemandu:
 - [ ] **Sisa operasi saldo, proposal, overlap, dan tiket di repository.** Done when: `MemoryRepository` dan `PostgresRepository` sama-sama mendukungnya.
 - [ ] **Saldo efektif di validasi (K8).** Done when: test membuktikan saldo annual 8 dengan request annual pending 5 hari menolak pengajuan annual 5 hari; request `approved`, `cancelled`, proposal belum dikonfirmasi, dan tipe cuti lain tidak dihitung; saldo di database tidak berubah.
 - [ ] **Rincian saldo di `get_my_leave_balance` (K8).** Done when: hasil tool memuat saldo di database, total hari pending, dan saldo efektif per tipe cuti.
+- [ ] **`policy_version` dan `proposal_id` (T7, K11).** Done when: proposal tersimpan dengan `policy_version` dari satu sumber yang jelas, dan `proposal_id` dibuat backend dengan `uuid4` serta prefix yang konsisten.
 - [ ] **`TOOL_SCHEMAS` dan `ToolExecutor`.** Done when: empat tool tervalidasi Pydantic, identitas selalu dari `auth`, dan tidak ada argumen `employee_id`.
 
 Pertanyaan pemandu:
@@ -158,6 +159,7 @@ Pertanyaan pemandu:
 ## Step 7 — API contract
 
 - [ ] **`src/api.py` (8 endpoint dan problem detail).** Done when: `pytest tests/test_api.py` hijau.
+- [ ] **`/readyz` saat PostgreSQL mati (T9).** Done when: dengan container `postgres` dihentikan, `/readyz` tidak mengembalikan `ready`, sesuai klaim di diagram.
 - [ ] **Checkpoint 3.** Done when: Streamlit menjawab kebijakan dan saldo, dan Bima tidak bisa membaca trace Alya.
 
 Pertanyaan pemandu:
@@ -169,6 +171,7 @@ Pertanyaan pemandu:
 
 - [ ] **`confirm_proposal` di kedua repository.** Done when: `pytest tests/test_actions.py` hijau, dan versi PostgreSQL memakai transaksi dengan row lock.
 - [ ] **Cek ulang saldo efektif saat konfirmasi (K8).** Done when: dua proposal 5 hari dengan saldo 8 tidak bisa sama-sama dikonfirmasi.
+- [ ] **Test constraint K9 di repo (T10).** Done when: sembilan kasus dari script sementara 9 Nov menjadi test, termasuk “asisten menulis `approved` ditolak” dan “proposal dikonfirmasi dua kali ditolak”.
 - [ ] **Semua test non-live.** Done when: `pytest -m "not live"` hijau seluruhnya.
 - [ ] **Checkpoint 4.** Done when: sebelum konfirmasi tidak ada request, dan konfirmasi ganda dengan key sama menghasilkan request ID yang sama.
 
@@ -224,4 +227,4 @@ Pertanyaan pemandu:
 |---|---|---|---|
 | 2026-11-05 | Analisis dokumentasi dan planning; setup Python dan git baseline; preflight test. | K1, K2, K4, dan K5 masih terbuka. | `business_days`. |
 | 2026-11-06 | Jadwal diperbarui: deadline 20 Nov. K1 diputuskan, K5 selesai, K7 diputuskan: urutan mengikuti `lab.md`. Docker dan PostgreSQL/Redis siap; dokumen ter-commit. Belum ada kode baru. | K2 masih terbuka. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Project brief, ADR, dan diagram di Step 1. |
-| 2026-11-09 | K8 diputuskan (saldo efektif di validasi). Project brief, ADR, dan draft diagram trust boundary selesai: Checkpoint 1 terpenuhi. | K2 masih menunggu instruktur. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | `token_hash`, lalu schema dan seed di Step 2. |
+| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash` dan schema 7 tabel selesai. Pytest tetap 4 passed (sama dengan baseline). | K2 masih menunggu instruktur. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Seed idempotent dan `--reset`, lalu `PostgresRepository` dasar. |

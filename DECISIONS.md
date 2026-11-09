@@ -14,6 +14,10 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K6 | Setup Docker ditunda ke Tahap 4 | Digantikan K7 | 2026-11-06 |
 | K7 | Urutan kerja mengikuti `lab.md` | **Diputuskan** | 2026-11-06 |
 | K8 | Saldo efektif saat validasi cuti | **Diputuskan** | 2026-11-09 |
+| K9 | Penjaga status dan keunikan di schema `leave_requests` | **Diputuskan** | 2026-11-09 |
+| K10 | Cara menyimpan token: SHA-256 tanpa salt | **Diputuskan** | 2026-11-09 |
+| K11 | `proposal_id` dibuat oleh backend | **Diputuskan** | 2026-11-09 |
+| K12 | Pilihan teknis schema lainnya | **Diputuskan** | 2026-11-09 |
 
 Status yang dipakai:
 
@@ -218,6 +222,95 @@ Status yang dipakai:
 
 **Tampilan saldo:** `get_my_leave_balance` mengembalikan saldo di database, total hari pending, dan saldo efektif per tipe cuti. Rincian ini membuat agent bisa menjelaskan kenapa saldo yang bisa diajukan lebih kecil, misalnya “8 hari, 5 hari sedang menunggu manajer, jadi bisa diajukan 3 hari.” Kontrak `LeaveBalance` di `src/contracts.py` tidak diubah, karena hasil tool tidak harus memakai model itu.
 
+## K9 — Penjaga status dan keunikan di schema `leave_requests`
+
+**Status:** Diputuskan
+
+**Temuan:** Asisten hanya boleh menulis `pending_manager_review`. Tetapi `data/historical_requests.json` berisi `approved` dan `cancelled`, yang di dunia nyata ditulis oleh sistem HR. Jika constraint `status` hanya mengizinkan `pending_manager_review`, data historis tidak bisa di-seed. Jika ketiga status diizinkan tanpa penjaga lain, bug di kode bisa membuat `approved` (hard gate).
+
+**Bukti:**
+
+- [data/historical_requests.json](data/historical_requests.json)
+- [brief.md:7](brief.md:7)
+
+**Opsi:**
+
+| Opsi | Bisa menahan | Kekurangan |
+|---|---|---|
+| A. Kode + test saja | Kesalahan logika di kode | Database menerima `approved` jika ada bug |
+| B. Kolom penanda penulis + CHECK | Bug di kode (database ikut menolak) | Tidak menahan penyerang yang menguasai aplikasi |
+| C. Role database terpisah untuk asisten dan sistem HR | Bug dan penyerang | Sistem HR di luar scope; Compose hanya punya satu user database |
+
+**Keputusan:** A + B. C dicatat sebagai production gap.
+
+- Status yang diizinkan: `pending_manager_review`, `approved`, `cancelled`.
+- Kolom `status_set_by` (`assistant`, `hr_system`, `seed`) mencatat siapa yang **terakhir mengubah status**. CHECK: jika `status_set_by = 'assistant'`, status wajib `pending_manager_review`.
+- Kolom ini sengaja tidak bernama `created_by`. Kalau penandanya “siapa yang membuat baris”, sistem HR tidak akan bisa menyetujui request yang dibuat asisten, karena barisnya tetap tercatat `assistant` dan CHECK akan menolak `approved`.
+- Kolom `policy_version` mencatat versi kebijakan yang dipakai saat validasi, misalnya `HR-LEAVE-001@2.1`. Kolom ini wajib terisi untuk proposal dan untuk request dari asisten. Request historis boleh kosong karena versinya tidak diketahui.
+- `UNIQUE(employee_id, idempotency_key)`: key milik dua pegawai berbeda tidak saling bertabrakan.
+- `UNIQUE(proposal_id)`: lapis terakhir jika row lock di kode konfirmasi ternyata salah. Satu proposal paling banyak menjadi satu request.
+
+**Alasan:** Pengaman pertama ada di kode, dan pengaman terakhir ada di database. Bug di salah satu lapis tidak langsung menjadi pelanggaran hard gate.
+
+**Risiko:** Status `rejected` belum ada karena tidak muncul di data. Jika sistem HR memakainya, constraint perlu ditambah.
+
+**Bukti implementasi (9 Nov 2026):** Sembilan uji constraint dijalankan di transaksi yang di-rollback, dan semuanya sesuai harapan. Asisten yang menulis `approved` ditolak oleh `assistant_writes_only_pending`. Sistem HR yang menyetujui request buatan asisten diterima. Proposal yang dikonfirmasi dua kali ditolak oleh `UNIQUE(proposal_id)`.
+
+## K10 — Cara menyimpan token: SHA-256 tanpa salt
+
+**Status:** Diputuskan
+
+**Temuan:** Token tidak boleh disimpan apa adanya. Tetapi saat request masuk, backend harus bisa mencari pegawai berdasarkan token. Karena itu, fungsi hash-nya harus menghasilkan nilai yang sama setiap kali, termasuk setelah server restart.
+
+**Bukti:** `hash('token-alya')` bawaan Python dijalankan di dua proses terpisah dan menghasilkan dua angka berbeda (hash randomization). `token_hash('token-alya')` menghasilkan hex 64 karakter yang sama di kedua proses.
+
+**Opsi:**
+
+| Opsi | Kelebihan | Kekurangan |
+|---|---|---|
+| `hash()` bawaan Python | Tidak perlu import | Berubah setiap proses, jadi semua login gagal setelah restart |
+| SHA-256 tanpa salt | Deterministik, bisa dicari dengan index, cepat | Token yang mudah ditebak bisa dicoba satu per satu |
+| HMAC-SHA256 dengan secret di server | Deterministik, dan hash curian tidak bisa dicocokkan tanpa secret | Ada secret tambahan yang harus dikelola |
+| bcrypt atau argon2 dengan salt | Standar untuk password | Salt acak membuat pencarian berdasarkan hash tidak mungkin |
+
+**Keputusan:** `hashlib.sha256(token.encode("utf-8")).hexdigest()`, sesuai TODO di starter.
+
+**Alasan:** Token di sistem sungguhan berupa string acak yang panjang, sehingga tidak bisa ditebak walaupun hash-nya cepat. Bcrypt dirancang untuk password buatan manusia yang pendek.
+
+**Risiko:** Token demo seperti `token-alya` mudah ditebak. Ini sudah tercatat di Production Gaps poin 1 (Login). Di production, HMAC dengan secret server bisa ditambahkan sebagai lapisan berikutnya.
+
+## K11 — `proposal_id` dibuat oleh backend
+
+**Status:** Diputuskan
+
+**Temuan:** `proposal_id` dipakai di URL konfirmasi dan disalin ke `leave_requests.proposal_id`. Jika nilainya berasal dari model atau dari pengguna, ID bisa dikarang atau ditebak.
+
+**Bukti:** [ui_contract.py:11](ui_contract.py:11) memakai `{proposal_id}` di path konfirmasi, dan [brief.md:44](brief.md:44) meminta proposal milik orang lain menghasilkan 404.
+
+**Keputusan:**
+
+- `prepare_leave_request` membuat `proposal_id` dengan `uuid4` setelah validasi lolos.
+- Model tidak pernah mengirim `proposal_id`. Pengguna hanya mengembalikan ID yang sebelumnya diberikan backend.
+- Endpoint konfirmasi tetap mengecek pemilik proposal. Jika bukan milik pemilik token, hasilnya 404.
+
+**Alasan:** ID acak tidak bisa ditebak, dan pengecekan pemilik tetap menjadi penjaga utama. Model tidak dipercaya untuk membuat identitas apa pun (lihat tabel trust boundary di `templates/architecture.md`).
+
+**Risiko:** Prefix ID (misalnya `PROP-`) belum ditentukan. Tentukan di Step 5 dan pakai secara konsisten.
+
+## K12 — Pilihan teknis schema lainnya
+
+**Status:** Diputuskan
+
+| Pilihan | Alasan | Trade-off |
+|---|---|---|
+| Full-text memakai konfigurasi `simple` | PostgreSQL tidak punya konfigurasi Bahasa Indonesia | Tanpa stemming: “mengajukan” dan “ajukan” dianggap kata berbeda. Kelemahan ini dibantu oleh pencarian vector. |
+| Kolom `search` berupa `tsvector GENERATED ... STORED` + index GIN | Selalu sinkron dengan `content` tanpa kode tambahan | Butuh ruang penyimpanan sedikit lebih besar |
+| Belum ada index vector (HNSW/IVFFlat) | Korpus hanya puluhan chunk, jadi scan penuh cukup cepat dan hasilnya exact | Perlu ditambahkan jika dokumen bertambah banyak |
+| Dimensi `embedding` dari `Settings.embedding_dimensions` | Mengganti model embedding cukup lewat `.env` | Nilai ini masuk ke DDL lewat `format`. Aman karena bertipe `int` dan divalidasi 64–4096, tidak pernah berasal dari input pengguna. |
+| `embedding` boleh kosong | Schema dan seed identitas bisa berjalan sebelum API key dan model diisi | Retrieval vector harus mengabaikan baris tanpa embedding |
+| Constraint penting diberi nama | Log error langsung menunjukkan aturan yang dilanggar, misalnya `assistant_writes_only_pending` | Tidak ada |
+| `CREATE ... IF NOT EXISTS` | Schema aman dijalankan berkali-kali | Tidak mengubah tabel yang sudah ada (lihat T6) |
+
 ## Temuan kecil
 
 Temuan berikut tidak memerlukan keputusan besar.
@@ -227,6 +320,14 @@ Temuan berikut tidak memerlukan keputusan besar.
 | T1 | Master prompt menyebut `submission_checklist.md`, sedangkan nama file sebenarnya `submission-checklist.md`. | Pakai nama file sebenarnya. |
 | T2 | README dan `docker-delivery.md` menyebut folder `participant/`, sedangkan isi folder itu berada di root workspace. | Jalankan perintah dari root workspace. |
 | T3 | Workspace belum menjadi git repository, padahal grader memakai checkout bersih. | Selesai: baseline commit `754e288`. |
+| T4 | Nama `brief.md` dan `templates/project-brief.md` mirip, padahal isinya berbeda. `brief.md` adalah soal dari mentor, sedangkan `templates/project-brief.md` adalah jawaban kita. | `brief.md` tidak diubah. |
+| T5 | Docker Desktop yang sudah hidup tidak otomatis menjalankan container. | Awal setiap sesi: `docker compose up -d postgres redis`, lalu cek status `healthy`. |
+| T6 | `CREATE TABLE IF NOT EXISTS` tidak mengubah tabel yang sudah ada. Perubahan schema tidak akan berlaku tanpa menghapus tabel. Pada 9 Nov, tujuh tabel yang masih kosong dihapus manual setelah constraint diberi nama. | `--reset` di task seed harus menghapus lalu membuat ulang semua tabel. |
+| T7 | `ActionProposal` di `src/contracts.py` tidak punya field `policy_version`, padahal kolomnya wajib di `action_proposals` (K9). `contracts.py` tidak boleh diubah. | Tentukan sumber nilainya di Step 5, misalnya konstanta versi aturan di `src/domain.py`. |
+| T8 | Package Python `pgvector` tidak ada di `requirements.txt`. | Di Step 3, kirim embedding sebagai teks `'[0.1,0.2,...]'` lalu cast ke `vector` di SQL. |
+| T9 | Diagram menyatakan `/readyz` tidak `ready` saat PostgreSQL mati. Ini masih asumsi. | Verifikasi di Step 7. |
+| T10 | Sembilan uji constraint K9 baru ada sebagai script sementara di scratchpad, belum menjadi test di repo. | Pindahkan ke test di Step 8. |
+| T11 | `.claude/settings.local.json` ter-track git. Isinya daftar izin tool lokal, termasuk path folder pribadi, dan berubah di setiap sesi. | Selesai 9 Nov: masuk `.gitignore` dan dikeluarkan dengan `git rm --cached`. File lokal tetap ada. Versi lama masih tersimpan di riwayat commit sebelumnya, tetapi isinya hanya izin tool dan path, bukan secret. |
 
 ## Format entri baru
 

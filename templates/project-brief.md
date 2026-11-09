@@ -111,7 +111,14 @@ Hal yang masih kurang sebelum sistem ini layak dipakai perusahaan sungguhan.
 - **Contoh:** HR mengubah batas cuti yang bisa dibawa ke tahun berikutnya dari 5 menjadi 3 hari. Asisten tetap menjawab 5 hari, lengkap dengan sitasi, sehingga terlihat meyakinkan padahal salah.
 - **Yang dibutuhkan:** proses resmi untuk memperbarui dokumen, menjalankan ulang indexing, dan memastikan hanya versi yang berlaku yang dipakai.
 
-### 7. Operasional
+### 7. Hak tulis di database
+
+- **Sekarang:** asisten dan seed memakai satu user database yang sama (`hr_app`). Larangan menulis `approved` dijaga oleh kode dan constraint `assistant_writes_only_pending`.
+- **Masalahnya:** constraint ini menahan bug, tetapi tidak menahan penyerang yang berhasil menguasai aplikasi. Penyerang bisa menulis `status_set_by = 'hr_system'` lalu `status = 'approved'`.
+- **Contoh:** ada celah di API yang membuat orang bisa menjalankan SQL bebas. Ia menyetujui cutinya sendiri dengan menyamar sebagai sistem HR.
+- **Yang dibutuhkan:** user database terpisah. User milik asisten hanya boleh menambah request berstatus pending, sedangkan perubahan status hanya bisa dilakukan oleh user milik sistem HR.
+
+### 8. Operasional
 
 - **Retensi data.**
   - **Sekarang:** trace dan tiket disimpan tanpa batas waktu.
