@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,7 @@ import psycopg
 
 from .config import get_settings
 from .contracts import AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk
+from .domain import today_wib
 from .providers import ModelProvider, OpenAIProvider
 from .repository import to_pgvector
 from .security import token_hash
@@ -18,9 +19,6 @@ from .security import token_hash
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
-
-# Indonesia has no daylight saving, so a fixed UTC+7 offset is exact and needs no tzdata.
-WIB = timezone(timedelta(hours=7), "WIB")
 
 # Fixed identifiers (never user input). One DROP statement handles the foreign keys between them.
 TABLES = (
@@ -214,10 +212,6 @@ def chunk_policy(path: Path) -> list[dict[str, str]]:
     if not chunks:
         raise ValueError(f"{path.name}: no sections found")
     return chunks
-
-
-def today_wib() -> date:
-    return datetime.now(WIB).date()
 
 
 def load_json(name: str) -> list[dict[str, Any]]:

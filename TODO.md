@@ -7,8 +7,8 @@ Urutan kerja mengikuti Step 1–11 di [lab.md](lab.md) (keputusan K7).
 - **Mulai:** Kamis, 5 November 2026
 - **Target internal:** chat dan saldo berjalan lewat Streamlit pada 13 November; seluruh sistem selesai pada 15 November 2026.
 - **Deadline pengumpulan:** 20 November 2026.
-- **Status saat ini:** Step 1–4 selesai, termasuk Checkpoint 2 (peta failure di Step 1 ditunda).
-- **Task berikutnya:** `src/domain.py` (Step 5).
+- **Status saat ini:** Step 1–7 selesai, termasuk Checkpoint 2 dan 3 (peta failure di Step 1 ditunda). Target internal 13 Nov (chat dan saldo lewat Streamlit) sudah tercapai. Sisa kegagalan pytest: 3 test konfirmasi (Step 8).
+- **Task berikutnya:** `confirm_proposal` di kedua repository (Step 8).
 
 ## Target rilis
 
@@ -130,13 +130,13 @@ Pertanyaan pemandu:
 
 ## Step 5 — Tool wajib
 
-- [ ] **`src/domain.py`.** Done when: `pytest tests/test_domain.py` hijau, dan test baru membuktikan aturan minimal 3 hari kerja berlaku untuk cuti tahunan tetapi tidak untuk cuti sakit.
-- [ ] **Sisa `src/security.py`.** Done when: `test_redaction_covers_sensitive_patterns` hijau.
-- [ ] **Sisa operasi saldo, proposal, overlap, dan tiket di repository.** Done when: `MemoryRepository` dan `PostgresRepository` sama-sama mendukungnya.
-- [ ] **Saldo efektif di validasi (K8).** Done when: test membuktikan saldo annual 8 dengan request annual pending 5 hari menolak pengajuan annual 5 hari; request `approved`, `cancelled`, proposal belum dikonfirmasi, dan tipe cuti lain tidak dihitung; saldo di database tidak berubah.
-- [ ] **Rincian saldo di `get_my_leave_balance` (K8).** Done when: hasil tool memuat saldo di database, total hari pending, dan saldo efektif per tipe cuti.
-- [ ] **`policy_version` dan `proposal_id` (T7, K11).** Done when: proposal tersimpan dengan `policy_version` dari satu sumber yang jelas, dan `proposal_id` dibuat backend dengan `uuid4` serta prefix yang konsisten.
-- [ ] **`TOOL_SCHEMAS` dan `ToolExecutor`.** Done when: empat tool tervalidasi Pydantic, identitas selalu dari `auth`, dan tidak ada argumen `employee_id`.
+- [x] **`src/domain.py`.** Done when: `pytest tests/test_domain.py` hijau, dan test baru membuktikan aturan minimal 3 hari kerja berlaku untuk cuti tahunan tetapi tidak untuk cuti sakit. Terbukti 9 Nov: `test_domain.py` dan `test_domain_rules.py` hijau (17 test); tafsiran K3 = hari pengajuan ikut dihitung.
+- [x] **Sisa `src/security.py`.** Done when: `test_redaction_covers_sensitive_patterns` hijau. Terbukti 9 Nov: test mentor hijau, ditambah 22 test di `tests/test_security.py`, termasuk teks HR normal yang tidak boleh berubah (K17).
+- [x] **Sisa operasi saldo, proposal, overlap, dan tiket di repository.** Done when: `MemoryRepository` dan `PostgresRepository` sama-sama mendukungnya. Terbukti 9 Nov: `tests/test_repository_contract.py` menjalankan 11 test yang sama untuk kedua repository; sisa baris uji di database 0 (K18).
+- [x] **Saldo efektif di validasi (K8).** Done when: test membuktikan saldo annual 8 dengan request annual pending 5 hari menolak pengajuan annual 5 hari; request `approved`, `cancelled`, proposal belum dikonfirmasi, dan tipe cuti lain tidak dihitung; saldo di database tidak berubah. Terbukti di level repository + domain (`effective_balances`). Tool wajib memanggilnya; dicek lagi di task `ToolExecutor`.
+- [x] **Rincian saldo di `get_my_leave_balance` (K8).** Done when: hasil tool memuat saldo di database, total hari pending, dan saldo efektif per tipe cuti. Terbukti: `balance_days` 8, `pending_manager_review_days` 5, `available_to_request_days` 3.
+- [x] **`policy_version` dan `proposal_id` (T7, K11).** Done when: proposal tersimpan dengan `policy_version` dari satu sumber yang jelas, dan `proposal_id` dibuat backend dengan `uuid4` serta prefix yang konsisten. Terbukti: `policy_version` dari `RULE_POLICY_VERSIONS`; `proposal_id` = `AP-` + 32 hex `uuid4`.
+- [x] **`TOOL_SCHEMAS` dan `ToolExecutor`.** Done when: empat tool tervalidasi Pydantic, identitas selalu dari `auth`, dan tidak ada argumen `employee_id`. Terbukti 9 Nov: 10 test di `tests/test_tools.py`; argumen `employee_id` dari model ditolak (`blocked`), bukan diabaikan diam-diam (K19).
 
 Pertanyaan pemandu:
 
@@ -147,9 +147,9 @@ Pertanyaan pemandu:
 
 ## Step 6 — Agent loop
 
-- [ ] **`respond` di `OpenAIProvider`.** Done when: `store=False`, strict schema, hashed `safety_identifier`, retry terbatas, usage tercatat.
-- [ ] **`respond` di `DeterministicProvider`.** Done when: respons deterministik, tanpa jaringan.
-- [ ] **`SYSTEM_INSTRUCTIONS` dan `AgentService.run`.** Done when: `pytest tests/test_agent_reliability.py` hijau, termasuk batas turn, tool call, dan citation validation.
+- [x] **`respond` di `OpenAIProvider`.** Done when: `store=False`, strict schema, hashed `safety_identifier`, retry terbatas, usage tercatat. Terbukti 9 Nov dengan model asli: 6 pertanyaan evaluasi + 18 pertanyaan kebijakan (2 putaran) sesuai harapan.
+- [x] **`respond` di `DeterministicProvider`.** Done when: respons deterministik, tanpa jaringan.
+- [x] **`SYSTEM_INSTRUCTIONS` dan `AgentService.run`.** Done when: `pytest tests/test_agent_reliability.py` hijau, termasuk batas turn, tool call, dan citation validation. Terbukti: test mentor hijau + 12 test di `tests/test_agent.py` (batas turn, tool call, waktu, sitasi, output guard, privasi trace) (K20).
 
 Pertanyaan pemandu:
 
@@ -158,9 +158,9 @@ Pertanyaan pemandu:
 
 ## Step 7 — API contract
 
-- [ ] **`src/api.py` (8 endpoint dan problem detail).** Done when: `pytest tests/test_api.py` hijau.
-- [ ] **`/readyz` saat PostgreSQL mati (T9).** Done when: dengan container `postgres` dihentikan, `/readyz` tidak mengembalikan `ready`, sesuai klaim di diagram.
-- [ ] **Checkpoint 3.** Done when: Streamlit menjawab kebijakan dan saldo, dan Bima tidak bisa membaca trace Alya.
+- [x] **`src/api.py` (8 endpoint dan problem detail).** Done when: `pytest tests/test_api.py` hijau. Terbukti 9 Nov: test mentor hijau + 10 test di `tests/test_api_contract.py`; server uvicorn diuji dengan curl (K21).
+- [x] **`/readyz` saat PostgreSQL mati (T9).** Done when: dengan container `postgres` dihentikan, `/readyz` tidak mengembalikan `ready`, sesuai klaim di diagram. Terbukti: 503 `not_ready`; chat 503 dalam 5 detik; pulih 5 detik setelah PostgreSQL hidup (sebelum perbaikan: ~75 detik).
+- [x] **Checkpoint 3.** Done when: Streamlit menjawab kebijakan dan saldo, dan Bima tidak bisa membaca trace Alya. Terbukti 9 Nov: lewat Streamlit, jatah cuti dijawab dengan `[HR-LEAVE-001]` dan saldo Alya tampil; trace Alya oleh Bima → 403.
 
 Pertanyaan pemandu:
 
@@ -234,4 +234,4 @@ Pertanyaan pemandu:
 |---|---|---|---|
 | 2026-11-05 | Analisis dokumentasi dan planning; setup Python dan git baseline; preflight test. | K1, K2, K4, dan K5 masih terbuka. | `business_days`. |
 | 2026-11-06 | Jadwal diperbarui: deadline 20 Nov. K1 diputuskan, K5 selesai, K7 diputuskan: urutan mengikuti `lab.md`. Docker dan PostgreSQL/Redis siap; dokumen ter-commit. Belum ada kode baru. | K2 masih terbuka. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Project brief, ADR, dan diagram di Step 1. |
-| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash`, schema 7 tabel, seed idempotent dan `--reset`, serta `PostgresRepository` dasar selesai: **Step 2 selesai**. **Step 3 selesai**: `chunk_policy`, `.env`, `embed`, dan indexing; 15 chunk ber-embedding. **Step 4 selesai**: cache dengan circuit breaker, hybrid retrieval (RRF + keyword rerank), Checkpoint 2, recall@3 = 7/7. Opsi C (`hr_api`) dijadwalkan di Step 8. Pytest 11 passed (baseline 4). | K2 masih menunggu instruktur. | Step 5: `domain.py`. |
+| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash`, schema 7 tabel, seed idempotent dan `--reset`, serta `PostgresRepository` dasar selesai: **Step 2 selesai**. **Step 3 selesai**: `chunk_policy`, `.env`, `embed`, dan indexing; 15 chunk ber-embedding. **Step 4 selesai**: cache dengan circuit breaker, hybrid retrieval (RRF + keyword rerank), Checkpoint 2, recall@3 = 7/7. **Step 5 selesai**: domain (K3 = hari pengajuan ikut dihitung), redaction, operasi repository dengan test kontrak Memory + PostgreSQL, saldo efektif K8, dan 4 tool. **Step 6 selesai**: agent loop terbatas, validasi sitasi, output guard, trace tanpa prompt; diuji live dengan model asli. **Step 7 selesai**: 8 endpoint, problem detail, Checkpoint 3 lewat Streamlit; bug pool lambat pulih setelah PostgreSQL mati ditemukan dan diperbaiki. Opsi C (`hr_api`) dijadwalkan di Step 8. Pytest 111 passed (baseline 4). | K2 masih menunggu instruktur. Alert p95 latency aktif (T17). | Step 8: konfirmasi. |

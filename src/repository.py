@@ -1,18 +1,38 @@
 """Repository contracts. Implement MemoryRepository first, then PostgreSQL/pgvector."""
 from __future__ import annotations
 
+import json
+import logging
 import math
+import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any, Protocol
 
+import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .contracts import ActionProposal, ActionResult, AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk
-from .security import token_hash
+from .domain import ACTIVE_STATUSES, RULE_POLICY_VERSIONS, today_wib
+from .monitoring import summarize
+from .security import redact, token_hash
 from .text import tokenize
 
+logger = logging.getLogger(__name__)
+
+DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 CHUNK_COLUMNS = "chunk_id, document_id, title, section, version, effective_date, content"
+REQUEST_COLUMNS = "request_id, leave_type, start_date, end_date, business_days, status, created_at"
+PROPOSAL_COLUMNS = (
+    "proposal_id, action_type, leave_type, start_date, end_date, business_days, "
+    "reason, validation_summary, expires_at"
+)
+
+
+def new_ticket_id() -> str:
+    return "HRT-" + uuid.uuid4().hex[:12].upper()
 
 
 def to_pgvector(vector: list[float]) -> str:
@@ -31,6 +51,7 @@ class Repository(Protocol):
     def lexical_search(self, query: str, limit: int) -> list[PolicyChunk]: ...
     def vector_search(self, embedding: list[float], limit: int) -> list[PolicyChunk]: ...
     def get_balances(self, employee_id: str) -> list[LeaveBalance]: ...
+    def get_pending_days(self, employee_id: str) -> dict[str, int]: ...
     def has_overlap(self, employee_id: str, start: date, end: date) -> bool: ...
     def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None: ...
     def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None: ...
@@ -40,6 +61,7 @@ class Repository(Protocol):
     def save_trace(self, trace: dict[str, Any]) -> None: ...
     def get_trace(self, trace_id: str) -> dict[str, Any] | None: ...
     def monitoring_summary(self) -> dict[str, Any]: ...
+    def index_status(self) -> dict[str, int]: ...
 
 
 class ConflictError(RuntimeError):
@@ -47,11 +69,74 @@ class ConflictError(RuntimeError):
 
 
 class MemoryRepository:
+    """Deterministic in-memory repository for tests. Every instance is isolated.
+
+    It loads the synthetic identities and balances from data/employees.json, so demo tokens
+    work, but NOT the historical requests: tests expect an employee to start with no requests.
+    """
+
     def __init__(self) -> None:
         self.chunks: list[PolicyChunk] = []
         # chunk_id -> vector. Empty by default, so vector_search returns nothing until a test fills it.
         self.embeddings: dict[str, list[float]] = {}
-        # TODO(M2): Add isolated in-memory identities, balances, proposals, requests, tickets, and traces.
+        self.identities: dict[str, AuthContext] = {}  # token_hash -> identity
+        self.balances: dict[str, list[LeaveBalance]] = {}
+        self.proposals: dict[str, tuple[str, ActionProposal]] = {}
+        # (employee_id, request). Tests may append rows directly to set up a scenario.
+        self.requests: list[tuple[str, LeaveRequestView]] = []
+        self.tickets: list[dict[str, Any]] = []
+        self.traces: dict[str, dict[str, Any]] = {}
+
+        as_of = today_wib()
+        for row in json.loads((DATA_DIR / "employees.json").read_text(encoding="utf-8")):
+            identity = AuthContext.model_validate(row)
+            self.identities[token_hash(row["token"])] = identity
+            self.balances[identity.employee_id] = [
+                LeaveBalance(leave_type=leave_type, available_days=days, as_of_date=as_of)
+                for leave_type, days in row.get("balances", {}).items()
+            ]
+
+    def health(self) -> bool:
+        return True
+
+    def authenticate(self, token: str) -> AuthContext | None:
+        return self.identities.get(token_hash(token)) if token else None
+
+    def get_balances(self, employee_id: str) -> list[LeaveBalance]:
+        return sorted(self.balances.get(employee_id, []), key=lambda b: b.leave_type)
+
+    def get_pending_days(self, employee_id: str) -> dict[str, int]:
+        totals: dict[str, int] = {}
+        for owner, request in self.requests:
+            if owner == employee_id and request.status == "pending_manager_review":
+                totals[request.leave_type] = totals.get(request.leave_type, 0) + request.business_days
+        return totals
+
+    def has_overlap(self, employee_id: str, start: date, end: date) -> bool:
+        return any(
+            owner == employee_id
+            and request.status in ACTIVE_STATUSES
+            and request.start_date <= end
+            and request.end_date >= start
+            for owner, request in self.requests
+        )
+
+    def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None:
+        self.proposals[proposal.proposal_id] = (employee_id, proposal)
+
+    def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None:
+        return self.proposals.get(proposal_id)
+
+    def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]:
+        mine = [request for owner, request in self.requests if owner == employee_id]
+        return sorted(mine, key=lambda r: (r.created_at, r.request_id), reverse=True)
+
+    def create_ticket(self, employee_id: str, category: str, summary: str) -> str:
+        ticket_id = new_ticket_id()
+        self.tickets.append(
+            {"ticket_id": ticket_id, "employee_id": employee_id, "category": category, "summary": redact(summary)}
+        )
+        return ticket_id
 
     def lexical_search(self, query: str, limit: int) -> list[PolicyChunk]:
         """Same idea as the PostgreSQL version: OR over query words, ranked by matches."""
@@ -74,36 +159,76 @@ class MemoryRepository:
         scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
         return [chunk.model_copy(update={"score": s}) for s, chunk in scored[:limit]]
 
-    # TODO(M2): Implement the rest of the Repository protocol for deterministic tests.
+    def save_trace(self, trace: dict[str, Any]) -> None:
+        # Stored as JSON text and read back as a new dict: callers can never mutate stored traces.
+        self.traces[trace["trace_id"]] = json.loads(json.dumps(trace))
+
+    def get_trace(self, trace_id: str) -> dict[str, Any] | None:
+        stored = self.traces.get(trace_id)
+        return json.loads(json.dumps(stored)) if stored else None
+
+    def monitoring_summary(self) -> dict[str, Any]:
+        return summarize(list(self.traces.values()))
+
+    def index_status(self) -> dict[str, int]:
+        # Memory tests run lexical-only, so missing vectors do not make the index "not ready".
+        return {"chunks": len(self.chunks), "missing_embeddings": 0}
+
+    # TODO(M2, Step 8): confirm_proposal.
 
 
 class PostgresRepository:
     """PostgreSQL implementation. Every value from outside travels as a %s parameter, never as SQL text."""
 
     HEALTH_TIMEOUT_SECONDS = 2.0
+    # A request waits at most this long for a connection, then fails fast (API answers 503).
+    REQUEST_TIMEOUT_SECONDS = 5.0
 
     def __init__(self, database_url: str, embedding_dimensions: int) -> None:
+        self.database_url = database_url
         self.embedding_dimensions = int(embedding_dimensions)
+        self.pool = self._new_pool()
+
+    def _new_pool(self) -> ConnectionPool:
         # open(wait=False): the API can start while PostgreSQL is still down; health() reports it.
-        self.pool = ConnectionPool(
-            database_url,
+        # check_connection: a connection that died while idle is replaced before a request gets it.
+        pool = ConnectionPool(
+            self.database_url,
             min_size=1,
             max_size=5,
+            timeout=self.REQUEST_TIMEOUT_SECONDS,
+            check=ConnectionPool.check_connection,
             kwargs={"row_factory": dict_row},
             open=False,
         )
-        self.pool.open(wait=False)
+        pool.open(wait=False)
+        return pool
 
     def close(self) -> None:
         self.pool.close()
 
     def health(self) -> bool:
+        """True when PostgreSQL answers. Also heals a stale pool.
+
+        After an outage the pool retries with exponential backoff (1, 2, 4, ... s), so it can
+        stay broken for a minute after PostgreSQL is back. If the pool fails but a direct
+        connection works, the database is fine and the pool is replaced.
+        """
         try:
             with self.pool.connection(timeout=self.HEALTH_TIMEOUT_SECONDS) as conn:
                 conn.execute("SELECT 1")
             return True
         except Exception:
+            pass
+        try:
+            with psycopg.connect(self.database_url, connect_timeout=int(self.HEALTH_TIMEOUT_SECONDS)) as conn:
+                conn.execute("SELECT 1")
+        except Exception:
             return False
+        stale, self.pool = self.pool, self._new_pool()
+        logger.warning("database reachable but pool was stale; pool replaced")
+        stale.close(timeout=1.0)
+        return True
 
     def authenticate(self, token: str) -> AuthContext | None:
         if not token:
@@ -172,5 +297,131 @@ class PostgresRepository:
             ).fetchall()
         return [PolicyChunk(**row) for row in rows]
 
-    # TODO(M2): Implement transaction-safe persistence for proposals, requests, tickets, and traces.
+    def get_pending_days(self, employee_id: str) -> dict[str, int]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT leave_type, sum(business_days)::int AS days
+                FROM leave_requests
+                WHERE employee_id = %s AND status = 'pending_manager_review'
+                GROUP BY leave_type
+                """,
+                (employee_id,),
+            ).fetchall()
+        return {row["leave_type"]: row["days"] for row in rows}
+
+    def has_overlap(self, employee_id: str, start: date, end: date) -> bool:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM leave_requests
+                    WHERE employee_id = %s
+                      AND status = ANY(%s)
+                      AND start_date <= %s
+                      AND end_date >= %s
+                ) AS overlaps
+                """,
+                (employee_id, sorted(ACTIVE_STATUSES), end, start),
+            ).fetchone()
+        return bool(row["overlaps"])
+
+    def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO action_proposals (
+                    proposal_id, employee_id, action_type, leave_type, start_date, end_date,
+                    business_days, reason, validation_summary, policy_version, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    proposal.proposal_id,
+                    employee_id,
+                    proposal.action_type,
+                    proposal.leave_type,
+                    proposal.start_date,
+                    proposal.end_date,
+                    proposal.business_days,
+                    proposal.reason,
+                    Jsonb(proposal.validation_summary),
+                    RULE_POLICY_VERSIONS[proposal.leave_type],
+                    proposal.expires_at,
+                ),
+            )
+
+    def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT employee_id, {PROPOSAL_COLUMNS} FROM action_proposals WHERE proposal_id = %s",
+                (proposal_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        employee_id = row.pop("employee_id")
+        return employee_id, ActionProposal(**row)
+
+    def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT {REQUEST_COLUMNS}
+                FROM leave_requests
+                WHERE employee_id = %s
+                ORDER BY created_at DESC, request_id DESC
+                """,
+                (employee_id,),
+            ).fetchall()
+        return [LeaveRequestView(**row) for row in rows]
+
+    def create_ticket(self, employee_id: str, category: str, summary: str) -> str:
+        """The summary is redacted here, at the storage boundary, whatever the caller did."""
+        ticket_id = new_ticket_id()
+        with self.pool.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO hr_tickets (ticket_id, employee_id, category, summary)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (ticket_id, employee_id, category, redact(summary)),
+            )
+        return ticket_id
+
+    def save_trace(self, trace: dict[str, Any]) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "INSERT INTO traces (trace_id, employee_id, payload) VALUES (%s, %s, %s)",
+                (trace["trace_id"], trace["employee_id"], Jsonb(trace)),
+            )
+
+    def get_trace(self, trace_id: str) -> dict[str, Any] | None:
+        with self.pool.connection() as conn:
+            row = conn.execute("SELECT payload FROM traces WHERE trace_id = %s", (trace_id,)).fetchone()
+        return row["payload"] if row else None
+
+    MONITORING_WINDOW_HOURS = 24
+
+    def monitoring_summary(self) -> dict[str, Any]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM traces WHERE created_at >= now() - make_interval(hours => %s)",
+                (self.MONITORING_WINDOW_HOURS,),
+            ).fetchall()
+        summary = summarize([row["payload"] for row in rows])
+        summary["window_hours"] = self.MONITORING_WINDOW_HOURS
+        return summary
+
+    def index_status(self) -> dict[str, int]:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT count(*) AS chunks,
+                       count(*) FILTER (WHERE embedding IS NULL) AS missing_embeddings
+                FROM policy_chunks
+                """
+            ).fetchone()
+        return {"chunks": row["chunks"], "missing_embeddings": row["missing_embeddings"]}
+
+    # TODO(M2, Step 8): confirm_proposal (transaction + row lock).
 

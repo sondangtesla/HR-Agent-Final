@@ -7,3 +7,4 @@ outputs/*.json
 outputs/*.md
 .streamlit/secrets.toml
 .claude/settings.local.json
+.claude/launch.json

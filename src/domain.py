@@ -1,7 +1,7 @@
 """Deterministic leave-domain rules; this module must never call the model."""
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 from .contracts import LeaveBalance, PrepareLeaveArgs
 
@@ -10,9 +10,79 @@ class DomainError(ValueError):
     pass
 
 
+# Indonesia has no daylight saving, so a fixed UTC+7 offset is exact and needs no tzdata.
+WIB = timezone(timedelta(hours=7), "WIB")
+
+
+def today_wib() -> date:
+    return datetime.now(WIB).date()
+
+
+# T7: the rules in this module implement these policy versions. Stored with every proposal
+# and request; tests/test_domain_rules.py fails if data/policies moves to a new version
+# without this table (and the rules) being reviewed.
+RULE_POLICY_VERSIONS = {
+    "annual": "HR-LEAVE-001@2.1",
+    "sick": "HR-LEAVE-002@1.4",
+    "parental": "HR-LEAVE-003@1.2",
+}
+
+# Requests that still occupy their dates. Cancelled ones do not.
+ACTIVE_STATUSES = frozenset({"pending_manager_review", "approved"})
+
+
+def effective_balances(balances: list[LeaveBalance], pending_days: dict[str, int]) -> list[LeaveBalance]:
+    """K8: database balance minus days still waiting for the manager, per leave type.
+
+    The database balance is never changed; this is only a calculation for validation.
+    """
+    return [
+        balance.model_copy(
+            update={"available_days": max(0, balance.available_days - pending_days.get(balance.leave_type, 0))}
+        )
+        for balance in balances
+    ]
+
+
+# K3: "paling lambat tiga hari kerja sebelum tanggal mulai" (data/policies/annual-leave.md).
+# The submission day counts: submitted Wednesday -> earliest start is next Monday.
+MIN_NOTICE_BUSINESS_DAYS = 3
+NOTICE_RULE_LEAVE_TYPES = frozenset({"annual"})  # sick leave cannot be planned days ahead
+
+
+def _is_business_day(day: date) -> bool:
+    return day.weekday() < 5  # Monday=0 ... Friday=4
+
+
+def _count_business_days(start: date, end: date) -> int:
+    """Business days from start to end, both inclusive. 0 when end < start."""
+    count, day = 0, start
+    while day <= end:
+        count += _is_business_day(day)
+        day += timedelta(days=1)
+    return count
+
+
 def business_days(start: date, end: date) -> int:
-    # TODO(M2): Validate ordering, exclude weekends, and reject zero business-day ranges.
-    raise NotImplementedError
+    if end < start:
+        raise DomainError("Tanggal selesai tidak boleh sebelum tanggal mulai.")
+    days = _count_business_days(start, end)
+    if days == 0:
+        raise DomainError("Rentang tanggal tidak memuat hari kerja (hanya Sabtu/Minggu).")
+    return days
+
+
+def notice_business_days(today: date, start: date) -> int:
+    """Business days from today (inclusive) up to the day before start."""
+    return _count_business_days(today, start - timedelta(days=1))
+
+
+def earliest_start_with_notice(today: date) -> date:
+    """First business day that still leaves MIN_NOTICE_BUSINESS_DAYS of notice."""
+    day = today
+    while not (_is_business_day(day) and notice_business_days(today, day) >= MIN_NOTICE_BUSINESS_DAYS):
+        day += timedelta(days=1)
+    return day
 
 
 def validate_leave_request(
@@ -21,8 +91,56 @@ def validate_leave_request(
     overlaps: bool,
     today: date,
 ) -> tuple[int, list[str]]:
-    # TODO(M2): Apply past-date, range, overlap, leave-type, and balance rules.
-    raise NotImplementedError
+    """Check every rule in a fixed order and return (business days, summary).
+
+    `balances` must already be the EFFECTIVE balances (database balance minus pending
+    days, K8); the caller computes them, so this module stays pure.
+
+    Order matters, and the tests lock it:
+    1. date order and 2. past date come before the 3-day rule (tests/test_domain.py:20);
+    5. overlap comes before 6. balance (tests/test_domain.py:39-42).
+    """
+    start, end = args.start_date, args.end_date
+
+    # 1. Date order
+    if end < start:
+        raise DomainError("Tanggal selesai tidak boleh sebelum tanggal mulai.")
+    # 2. Past date
+    if start < today:
+        raise DomainError(f"Tanggal mulai {start.isoformat()} sudah lewat (masa lalu).")
+    # 3. Business days in range
+    days = business_days(start, end)
+    # 4. Minimum notice (K3, annual leave only)
+    if args.leave_type in NOTICE_RULE_LEAVE_TYPES:
+        notice = notice_business_days(today, start)
+        if notice < MIN_NOTICE_BUSINESS_DAYS:
+            earliest = earliest_start_with_notice(today)
+            raise DomainError(
+                f"Cuti tahunan harus diajukan paling lambat {MIN_NOTICE_BUSINESS_DAYS} hari kerja "
+                f"sebelum tanggal mulai. Tanggal mulai paling cepat: {earliest.isoformat()}."
+            )
+    # 5. Overlap with an active request
+    if overlaps:
+        raise DomainError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
+    # 6. Effective balance
+    balance = next((b for b in balances if b.leave_type == args.leave_type), None)
+    if balance is None:
+        raise DomainError(f"Saldo cuti {args.leave_type} tidak ditemukan.")
+    if days > balance.available_days:
+        raise DomainError(
+            f"Saldo cuti {args.leave_type} tidak cukup: diminta {days} hari kerja, "
+            f"tersedia {balance.available_days} hari."
+        )
+
+    summary = [
+        f"Rentang {start.isoformat()} s.d. {end.isoformat()} berisi {days} hari kerja.",
+        "Tidak ada tumpang tindih dengan permintaan aktif.",
+        f"Saldo cuti {args.leave_type} cukup: tersedia {balance.available_days} hari, "
+        f"sisa {balance.available_days - days} hari setelah pengajuan ini.",
+    ]
+    if args.leave_type in NOTICE_RULE_LEAVE_TYPES:
+        summary.insert(1, f"Memenuhi batas pengajuan minimal {MIN_NOTICE_BUSINESS_DAYS} hari kerja.")
+    return days, summary
 
 
 def estimate_cost(
@@ -31,6 +149,7 @@ def estimate_cost(
     input_rate: float | None,
     output_rate: float | None,
 ) -> float | None:
-    # TODO(M2): Return None unless both instructor-supplied rates are configured.
-    raise NotImplementedError
-
+    """Cost in the rate's currency. Rates are per 1M tokens and come from the instructor."""
+    if input_rate is None or output_rate is None:
+        return None
+    return round((input_tokens * input_rate + output_tokens * output_rate) / 1_000_000, 6)
