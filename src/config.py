@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from psycopg.conninfo import make_conninfo
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +13,9 @@ class Settings(BaseSettings):
     app_name: str = "HR Policy and Leave Assistant"
     environment: str = "development"
     database_url: str = "postgresql://hr_app:hr_app@postgres:5432/hr_assistant"
+    # Demo credentials, same level as hr_app:hr_app in docker-compose.yml. Production: secret manager.
+    api_db_user: str = "hr_api"
+    api_db_password: str = "hr_api_demo"
     redis_url: str = "redis://redis:6379/0"
     openai_api_key: str | None = None
     openai_base_url: str | None = None
@@ -39,6 +43,13 @@ class Settings(BaseSettings):
     @classmethod
     def empty_string_is_none(cls, value):
         return None if value == "" else value
+
+    @property
+    def api_database_url(self) -> str:
+        """Login for the API process: same server and database as DATABASE_URL, but the
+        least-privilege account created by setup_lab (K9 option C). DATABASE_URL itself
+        (hr_app, superuser) is used only by setup_lab."""
+        return make_conninfo(self.database_url, user=self.api_db_user, password=self.api_db_password)
 
     @property
     def live_model_ready(self) -> bool:

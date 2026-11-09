@@ -7,8 +7,8 @@ Urutan kerja mengikuti Step 1–11 di [lab.md](lab.md) (keputusan K7).
 - **Mulai:** Kamis, 5 November 2026
 - **Target internal:** chat dan saldo berjalan lewat Streamlit pada 13 November; seluruh sistem selesai pada 15 November 2026.
 - **Deadline pengumpulan:** 20 November 2026.
-- **Status saat ini:** Step 1–7 selesai, termasuk Checkpoint 2 dan 3 (peta failure di Step 1 ditunda). Target internal 13 Nov (chat dan saldo lewat Streamlit) sudah tercapai. Sisa kegagalan pytest: 3 test konfirmasi (Step 8).
-- **Task berikutnya:** `confirm_proposal` di kedua repository (Step 8).
+- **Status saat ini:** Step 1–10 selesai, termasuk Checkpoint 2, 3, dan 4 (peta failure di Step 1 ditunda). Evaluasi live **GO** (16/16). Pytest 157 passed, 0 failed.
+- **Task berikutnya:** `Dockerfile` dan alur `docker-delivery.md` dari checkout bersih (Step 11).
 
 ## Target rilis
 
@@ -169,16 +169,16 @@ Pertanyaan pemandu:
 
 ## Step 8 — Confirmation boundary
 
-- [ ] **`confirm_proposal` di kedua repository.** Done when: `pytest tests/test_actions.py` hijau, dan versi PostgreSQL memakai transaksi dengan row lock.
-- [ ] **Cek ulang saldo efektif saat konfirmasi (K8).** Done when: dua proposal 5 hari dengan saldo 8 tidak bisa sama-sama dikonfirmasi.
-- [ ] **Test constraint K9 di repo (T10).** Done when: sembilan kasus dari script sementara 9 Nov menjadi test, termasuk “asisten menulis `approved` ditolak” dan “proposal dikonfirmasi dua kali ditolak”.
-- [ ] **API login sebagai `hr_api` (K9 opsi C, brief poin 7).** Estimasi 2 jam. Done when:
+- [x] **`confirm_proposal` di kedua repository.** Done when: `pytest tests/test_actions.py` hijau, dan versi PostgreSQL memakai transaksi dengan row lock. Terbukti 9 Nov: test mentor hijau; PostgreSQL memakai advisory lock per pegawai + `FOR UPDATE` pada proposal (K22).
+- [x] **Cek ulang saldo efektif saat konfirmasi (K8).** Done when: dua proposal 5 hari dengan saldo 8 tidak bisa sama-sama dikonfirmasi. Terbukti berurutan maupun paralel (2 thread bersamaan) di Memory dan PostgreSQL.
+- [x] **Test constraint K9 di repo (T10).** Done when: sembilan kasus dari script sementara 9 Nov menjadi test, termasuk “asisten menulis `approved` ditolak” dan “proposal dikonfirmasi dua kali ditolak”. Terbukti: `tests/test_database_guards.py`.
+- [x] **API login sebagai `hr_api` (K9 opsi C, brief poin 7).** Estimasi 2 jam. Terbukti 9 Nov: 16 test di `tests/test_database_guards.py`; API terhubung sebagai `hr_api`; `health()` False jika login gagal. Sisa: uji dari checkout bersih ikut task Step 11. Done when:
   - `setup_lab` (login sebagai `hr_app`) membuat role `hr_api` beserta `GRANT` per tabel dan RLS di `leave_requests`, dan tetap aman dijalankan ulang ketika role sudah ada.
   - API membentuk URL `hr_api` dari `DATABASE_URL` tanpa mengubah `docker-compose.yml`, dan tidak pernah memakai `SET ROLE`.
   - Test: login sebagai `hr_api` gagal menulis `approved` walaupun `status_set_by` diisi `'hr_system'`, serta gagal `UPDATE`, `DELETE`, dan `DROP TABLE`.
   - Alur `docker-delivery.md` dari checkout bersih tetap lulus, dan `/readyz` mendeteksi jika API gagal login.
-- [ ] **Semua test non-live.** Done when: `pytest -m "not live"` hijau seluruhnya.
-- [ ] **Checkpoint 4.** Done when: sebelum konfirmasi tidak ada request, dan konfirmasi ganda dengan key sama menghasilkan request ID yang sama.
+- [x] **Semua test non-live.** Done when: `pytest -m "not live"` hijau seluruhnya. Terbukti 9 Nov: 144 passed, 0 failed.
+- [x] **Checkpoint 4.** Done when: sebelum konfirmasi tidak ada request, dan konfirmasi ganda dengan key sama menghasilkan request ID yang sama. Terbukti lewat Streamlit: sebelum Konfirmasi hanya ada `LR-HIST-001`; dua klik → satu request `LR-48E7EBDEA378`, `pending_manager_review`, `status_set_by = assistant`; saldo tetap 8.
 
 Pertanyaan pemandu:
 
@@ -190,7 +190,7 @@ Pertanyaan pemandu:
 
 ## Step 9 — Telemetry dan privacy
 
-- [ ] **Telemetry dan redaction.** Done when: trace tanpa prompt mentah/chain-of-thought dan tes kebocoran `diabetes` lulus.
+- [x] **Telemetry dan redaction.** Done when: trace tanpa prompt mentah/chain-of-thought dan tes kebocoran `diabetes` lulus. Terbukti 9 Nov: 5 test di `tests/test_privacy.py` (setiap pintu masuk dan keluar); uji live dengan 3 pesan penuh PII lalu pindai database → 0 kebocoran (K23).
 
 Pertanyaan pemandu:
 
@@ -199,11 +199,11 @@ Pertanyaan pemandu:
 
 ## Step 10 — Evaluation dan monitoring
 
-- [ ] **`/monitoring/summary` dan `/monitoring/alerts`.** Done when: alert memakai `data/monitoring_rules.json` dan menghormati `minimum_samples`.
-- [ ] **`src/run_evaluation.py`.** Done when: 15 kasus berjalan dan `outputs/evaluation_report.json` memuat metrik plus GO/NO-GO.
-- [ ] **Regression case overlap (tugas assessment).** Done when: case, expected, actual, trace ID, dan keputusan lulus/gagal terkumpul.
-- [ ] **Perbaiki kegagalan evaluasi.** Done when: semua target rilis tercapai; acceptance assertion tidak dilonggarkan.
-- [ ] **Uji kegagalan.** Done when: model, PostgreSQL, dan Redis mati masing-masing berakhir aman tanpa side effect tambahan.
+- [x] **`/monitoring/summary` dan `/monitoring/alerts`.** Done when: alert memakai `data/monitoring_rules.json` dan menghormati `minimum_samples`. Terbukti sejak Step 7 (K21): alert p95 menyala pada 34 run, tidak menyala pada 1 run.
+- [x] **`src/run_evaluation.py`.** Done when: 15 kasus berjalan dan `outputs/evaluation_report.json` memuat metrik plus GO/NO-GO. Terbukti 9 Nov: 16 kasus live, **GO**; evaluator sendiri diuji bisa NO-GO (`tests/test_evaluation.py`) (K24).
+- [x] **Regression case overlap (tugas assessment).** Done when: case, expected, actual, trace ID, dan keputusan lulus/gagal terkumpul. Terbukti: `leave-overlap-016` di `evaluation/regression_cases.json`, lulus, trace `tr-b42f577c…`, dicatat di `templates/evaluation-report.md`.
+- [x] **Perbaiki kegagalan evaluasi.** Done when: semua target rilis tercapai; acceptance assertion tidak dilonggarkan. Terbukti: pass 100%, hard gates 100%, recall@3 100%, citation validity 100%.
+- [x] **Uji kegagalan.** Done when: model, PostgreSQL, dan Redis mati masing-masing berakhir aman tanpa side effect tambahan. Terbukti 9 Nov: jumlah request/proposal/tiket sama sebelum dan sesudah untuk ketiganya.
 
 ## Step 11 — Deployment dan demo
 
@@ -221,12 +221,12 @@ Pertanyaan pemandu:
 # Finalisasi
 
 - [ ] **Diagram final dan ADR.** Done when: `architecture.md` memuat semua elemen wajib dan keputusan RAG vs fine-tuning vs multi-agent.
-- [ ] **`templates/evaluation-report.md`.** Done when: terisi dari hasil evaluasi nyata.
+- [x] **`templates/evaluation-report.md`.** Done when: terisi dari hasil evaluasi nyata. Selesai 9 Nov dari run live GO; isi ulang setelah evaluasi terakhir sebelum pengumpulan.
 - [ ] **8 soal `assessment.md`.** Done when: tiap jawaban merujuk kode atau test.
 - [ ] **Screenshot dan backup output.** Done when: UI, monitoring, dan hasil test tersimpan tanpa secret.
 - [ ] **Demo 5–7 menit.** Done when: latihan dua kali dengan timer, mencakup happy, blocked, dan failure path.
 - [ ] **Uji akhir dari checkout bersih.** Done when: clone baru lulus `submission-checklist.md`.
-- [ ] **Cocokkan brief poin 7 dengan kode.** Done when: jika task `hr_api` di Step 8 selesai, brief tetap; jika tidak selesai, poin 7 dikembalikan ke versi “API masih login sebagai `hr_app`”.
+- [x] **Cocokkan brief poin 7 dengan kode.** Done when: jika task `hr_api` di Step 8 selesai, brief tetap; jika tidak selesai, poin 7 dikembalikan ke versi “API masih login sebagai `hr_app`”. Selesai 9 Nov: task `hr_api` selesai, brief diperbarui dari “akan diterapkan” menjadi kondisi sekarang.
 
 ## Progress log
 
@@ -234,4 +234,4 @@ Pertanyaan pemandu:
 |---|---|---|---|
 | 2026-11-05 | Analisis dokumentasi dan planning; setup Python dan git baseline; preflight test. | K1, K2, K4, dan K5 masih terbuka. | `business_days`. |
 | 2026-11-06 | Jadwal diperbarui: deadline 20 Nov. K1 diputuskan, K5 selesai, K7 diputuskan: urutan mengikuti `lab.md`. Docker dan PostgreSQL/Redis siap; dokumen ter-commit. Belum ada kode baru. | K2 masih terbuka. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Project brief, ADR, dan diagram di Step 1. |
-| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash`, schema 7 tabel, seed idempotent dan `--reset`, serta `PostgresRepository` dasar selesai: **Step 2 selesai**. **Step 3 selesai**: `chunk_policy`, `.env`, `embed`, dan indexing; 15 chunk ber-embedding. **Step 4 selesai**: cache dengan circuit breaker, hybrid retrieval (RRF + keyword rerank), Checkpoint 2, recall@3 = 7/7. **Step 5 selesai**: domain (K3 = hari pengajuan ikut dihitung), redaction, operasi repository dengan test kontrak Memory + PostgreSQL, saldo efektif K8, dan 4 tool. **Step 6 selesai**: agent loop terbatas, validasi sitasi, output guard, trace tanpa prompt; diuji live dengan model asli. **Step 7 selesai**: 8 endpoint, problem detail, Checkpoint 3 lewat Streamlit; bug pool lambat pulih setelah PostgreSQL mati ditemukan dan diperbaiki. Opsi C (`hr_api`) dijadwalkan di Step 8. Pytest 111 passed (baseline 4). | K2 masih menunggu instruktur. Alert p95 latency aktif (T17). | Step 8: konfirmasi. |
+| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash`, schema 7 tabel, seed idempotent dan `--reset`, serta `PostgresRepository` dasar selesai: **Step 2 selesai**. **Step 3 selesai**: `chunk_policy`, `.env`, `embed`, dan indexing; 15 chunk ber-embedding. **Step 4 selesai**: cache dengan circuit breaker, hybrid retrieval (RRF + keyword rerank), Checkpoint 2, recall@3 = 7/7. **Step 5 selesai**: domain (K3 = hari pengajuan ikut dihitung), redaction, operasi repository dengan test kontrak Memory + PostgreSQL, saldo efektif K8, dan 4 tool. **Step 6 selesai**: agent loop terbatas, validasi sitasi, output guard, trace tanpa prompt; diuji live dengan model asli. **Step 7 selesai**: 8 endpoint, problem detail, Checkpoint 3 lewat Streamlit; bug pool lambat pulih setelah PostgreSQL mati ditemukan dan diperbaiki. **Step 8 selesai**: konfirmasi transaksional (advisory + row lock), K8 dicek ulang termasuk saat paralel, test constraint K9, opsi C (`hr_api` + RLS), Checkpoint 4. **Step 9 selesai**: pesan disamarkan sebelum dikirim ke provider, waktu model/tool di trace, test privasi end-to-end, test repository diisolasi dari data demo. **Step 10 selesai**: evaluator live 16 kasus → GO (pass, hard gate, recall@3, sitasi semuanya 100%); regression case overlap; uji kegagalan model/PostgreSQL/Redis tanpa side effect; T17 ditutup (93% waktu di model). Pytest 157 passed, 0 failed. | K2 masih menunggu instruktur. | Step 11: Docker. |

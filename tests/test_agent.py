@@ -147,6 +147,17 @@ def test_policy_balance_and_proposal_flows(repository: MemoryRepository) -> None
     assert repository.list_leave_requests("EMP-001") == []  # still nothing until Konfirmasi
 
 
+def test_blocked_leave_request_is_reported_as_abstained(repository: MemoryRepository) -> None:
+    """Evaluation case leave-past-009: nothing was done, so the outcome must say so."""
+    response = make_agent(repository, DeterministicProvider()).run(
+        ChatRequest(message="Ajukan cuti tahunan 2025-01-02"), ALYA
+    )
+    assert response.outcome == "abstained"
+    assert response.action_proposal is None
+    assert [(c.name, c.status) for c in response.tool_calls] == [("prepare_leave_request", "blocked")]
+    assert "masa lalu" in response.answer  # the reason is still explained to the user
+
+
 def test_unknown_policy_abstains(repository: MemoryRepository) -> None:
     response = make_agent(repository, DeterministicProvider()).run(
         ChatRequest(message="Berapa subsidi perjalanan ke Mars?"), ALYA

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from psycopg import sql
 
 from .config import get_settings
 from .contracts import AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     validation_summary  JSONB NOT NULL DEFAULT '[]'::jsonb,
     policy_version      TEXT NOT NULL,
     expires_at          TIMESTAMPTZ NOT NULL,
+    confirmed_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (end_date >= start_date)
 );
@@ -169,6 +171,43 @@ def parse_front_matter(lines: list[str], path: Path) -> tuple[dict[str, str], li
     if missing:
         raise ValueError(f"{path.name}: front matter missing {missing}")
     return meta, lines[end + 1 :]
+
+
+# K9 option C: what the API account may do. Anything not listed is denied by PostgreSQL itself.
+API_GRANTS = """
+GRANT USAGE ON SCHEMA public TO {role};
+REVOKE ALL ON employees, leave_balances, action_proposals, leave_requests,
+              hr_tickets, policy_chunks, traces FROM {role};
+GRANT SELECT ON employees, leave_balances, policy_chunks TO {role};
+GRANT SELECT, INSERT ON action_proposals, leave_requests, traces TO {role};
+GRANT UPDATE (confirmed_at) ON action_proposals TO {role};
+GRANT INSERT ON hr_tickets TO {role};
+
+ALTER TABLE leave_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS api_read ON leave_requests;
+CREATE POLICY api_read ON leave_requests FOR SELECT TO {role} USING (true);
+DROP POLICY IF EXISTS api_insert_pending_only ON leave_requests;
+CREATE POLICY api_insert_pending_only ON leave_requests FOR INSERT TO {role}
+    WITH CHECK (status = 'pending_manager_review' AND status_set_by = 'assistant');
+"""
+
+
+def ensure_api_role(conn: psycopg.Connection, user: str, password: str) -> None:
+    """Create or refresh the least-privilege login used by the API. Safe to run again.
+
+    The role is server-wide, so it survives --reset; grants and policies are re-applied
+    because DROP TABLE removes them.
+    """
+    role = sql.Identifier(user)
+    exists = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (user,)).fetchone()
+    verb = "ALTER" if exists else "CREATE"
+    conn.execute(
+        sql.SQL(verb + " ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD {}").format(
+            role, sql.Literal(password)
+        )
+    )
+    conn.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(conn.info.dbname), role))
+    conn.execute(sql.SQL(API_GRANTS).format(role=role))
 
 
 def chunk_policy(path: Path) -> list[dict[str, str]]:
@@ -380,6 +419,7 @@ def reset_and_seed(reset: bool = False, provider: ModelProvider | None = None) -
         if reset:
             drop_tables(conn)
         create_schema(conn, settings.embedding_dimensions)
+        ensure_api_role(conn, settings.api_db_user, settings.api_db_password)
         seed_employees(conn, employees, as_of=today_wib())
         seed_historical_requests(conn, history)
         seed_policies(conn)

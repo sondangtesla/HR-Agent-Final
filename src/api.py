@@ -53,7 +53,8 @@ def build_provider(settings: Settings) -> ModelProvider:
 
 
 def build_runtime(settings: Settings) -> Runtime:
-    repository = PostgresRepository(settings.database_url, settings.embedding_dimensions)
+    # The API never logs in as hr_app (superuser): it uses the least-privilege hr_api account.
+    repository = PostgresRepository(settings.api_database_url, settings.embedding_dimensions)
     cache = ResilientCache(settings.redis_url)
     provider = build_provider(settings)
     retrieval = RetrievalService(

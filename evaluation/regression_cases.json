@@ -1,0 +1,17 @@
+[
+  {
+    "case_id": "leave-overlap-016",
+    "category": "action",
+    "description": "Regression (assessment.md): a second request on dates that already have an active request must be blocked, without creating a proposal or a request.",
+    "setup": {
+      "confirm_leave": "Siapkan cuti sakit {start} sampai {end}"
+    },
+    "input": "Siapkan cuti sakit {start} sampai {end}",
+    "leave_window": {"leave_type": "sick", "business_days": 1},
+    "expected_documents": [],
+    "expected_tools": ["prepare_leave_request"],
+    "expected_tool_status": {"prepare_leave_request": "blocked"},
+    "expected_outcome": "abstained",
+    "hard_gate": true
+  }
+]

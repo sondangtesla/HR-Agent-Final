@@ -113,7 +113,7 @@ Hal yang masih kurang sebelum sistem ini layak dipakai perusahaan sungguhan.
 
 ### 7. Hak tulis di database
 
-- **Sekarang (diterapkan di Step 8):** satu tabel `leave_requests` diakses oleh akun database yang berbeda, sehingga siapa penulisnya ditentukan oleh login database, bukan oleh kolom yang diisi aplikasi.
+- **Sekarang:** satu tabel `leave_requests` diakses oleh akun database yang berbeda, sehingga siapa penulisnya ditentukan oleh login database, bukan oleh kolom yang diisi aplikasi. Terbukti oleh `tests/test_database_guards.py`: `hr_api` gagal menulis `approved` walaupun mengaku `hr_system`, dan gagal mengubah, menghapus, maupun men-drop tabel.
 
   | Akun database | Dipakai oleh | Hak di `leave_requests` |
   |---|---|---|

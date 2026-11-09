@@ -127,12 +127,16 @@ class AgentService:
             today=self.tools.today_factory().isoformat(), display_name=auth.display_name
         )
         # store=False: the whole conversation is resent every turn, built from these items.
-        items: list[Any] = [{"role": "user", "content": request.message}]
+        # Data minimisation: the provider never needs a diagnosis, email, phone, or token to
+        # answer HR questions, so they are masked BEFORE the message leaves our system.
+        items: list[Any] = [{"role": "user", "content": redact(request.message)}]
+        model_ms = tools_ms = 0
 
         retrieved: dict[str, list[dict[str, Any]]] = {}
+        search_rankings: list[list[str]] = []  # document IDs per search, in rank order (recall@k)
         tool_summaries: list[ToolCallSummary] = []
         proposal: ActionProposal | None = None
-        searched = ticket_created = False
+        searched = ticket_created = action_refused = False
         input_tokens = output_tokens = tool_count = turns = 0
         final_text: str | None = None
         stop_reason: str | None = None
@@ -143,6 +147,7 @@ class AgentService:
             if remaining <= 0:
                 stop_reason = "timeout"
                 break
+            model_started = time.perf_counter()
             try:
                 turn = self.provider.respond(
                     input_data=items,
@@ -153,9 +158,11 @@ class AgentService:
                     timeout_seconds=remaining,
                 )
             except Exception as exc:  # provider down: stop safely, never retry tools
+                model_ms += int((time.perf_counter() - model_started) * 1000)
                 stop_reason = "provider_error"
                 error = f"{type(exc).__name__}: {redact(str(exc))}"
                 break
+            model_ms += int((time.perf_counter() - model_started) * 1000)
             turns += 1
             input_tokens += turn.input_tokens
             output_tokens += turn.output_tokens
@@ -175,16 +182,18 @@ class AgentService:
                     result, new_proposal = {"status": "blocked", "reason": "Tiket sudah dibuat pada percakapan ini."}, None
                 else:
                     result, new_proposal = self.tools.execute(call.name, call.arguments, auth)
-                tool_summaries.append(ToolCallSummary(
-                    name=call.name, status=result["status"],
-                    duration_ms=int((time.perf_counter() - tool_started) * 1000),
-                ))
+                tool_duration = int((time.perf_counter() - tool_started) * 1000)
+                tools_ms += tool_duration
+                tool_summaries.append(ToolCallSummary(name=call.name, status=result["status"], duration_ms=tool_duration))
                 if call.name == "search_hr_policy" and result["status"] == "ok":
                     searched = True
+                    search_rankings.append([chunk["document_id"] for chunk in result["results"]])
                     for chunk in result["results"]:
                         retrieved.setdefault(chunk["document_id"], []).append(chunk)
                 if call.name == "create_hr_ticket" and result["status"] == "ok":
                     ticket_created = True
+                if call.name == "prepare_leave_request" and result["status"] != "ok":
+                    action_refused = True
                 if new_proposal is not None:
                     proposal = new_proposal
                 items.append({
@@ -210,6 +219,10 @@ class AgentService:
                 outcome, answer = Outcome.action_proposed, final_text
             elif ticket_created:
                 outcome, answer = Outcome.escalated, final_text
+            elif action_refused:
+                # The requested action was not carried out (e.g. a past date). The model's text
+                # explains why; the outcome says honestly that nothing was done.
+                outcome, answer, stop_reason = Outcome.abstained, final_text, "action_blocked"
             elif searched and not citations:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             else:
@@ -233,9 +246,12 @@ class AgentService:
             "turns": turns,
             "tool_calls": [summary.model_dump() for summary in tool_summaries],
             "retrieved_documents": sorted(retrieved),
+            "search_rankings": search_rankings,
             "cited_documents": [c.document_id for c in citations],
             "proposal_id": proposal.proposal_id if proposal else None,
             "usage": usage.model_dump(),
+            # Where the time went (T17): model calls vs tool calls; the rest is our own overhead.
+            "timings": {"model_ms": model_ms, "tools_ms": tools_ms},
             "error": error,
             "model_mode": s.model_mode,
         })

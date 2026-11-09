@@ -27,6 +27,9 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K19 | Skema dan eksekusi tool | **Diputuskan** | 2026-11-09 |
 | K20 | Agent loop, sitasi, dan output guard | **Diputuskan** | 2026-11-09 |
 | K21 | API, kesiapan, monitoring, dan pemulihan database | **Diputuskan** | 2026-11-09 |
+| K22 | Transaksi konfirmasi | **Diputuskan** | 2026-11-09 |
+| K23 | Telemetry dan minimisasi data ke provider | **Diputuskan** | 2026-11-09 |
+| K24 | Evaluator live dan aturan penilaian | **Diputuskan** | 2026-11-09 |
 
 Status yang dipakai:
 
@@ -254,7 +257,7 @@ Status yang dipakai:
 | B. Kolom penanda penulis + CHECK | Bug di kode (database ikut menolak) | Tidak menahan penyerang yang menguasai aplikasi |
 | C. Role database terpisah untuk asisten dan sistem HR | Bug dan penyerang | Sistem HR di luar scope; Compose hanya punya satu user database |
 
-**Keputusan:** A + B sekarang. C dikerjakan di Step 8 (lihat pembaruan di bawah).
+**Keputusan:** A + B + C. C selesai di Step 8 (lihat pembaruan dan bukti di bawah).
 
 - Status yang diizinkan: `pending_manager_review`, `approved`, `cancelled`.
 - Kolom `status_set_by` (`assistant`, `hr_system`, `seed`) mencatat siapa yang **terakhir mengubah status**. CHECK: jika `status_set_by = 'assistant'`, status wajib `pending_manager_review`.
@@ -293,6 +296,8 @@ Ancaman yang tertahan:
 | `SET ROLE` (ditolak) | ✅ | ❌ | ❌ |
 | **C: API login sebagai `hr_api`** | ✅ | ✅ | ❌ |
 | C + compose diubah atau secret manager | ✅ | ✅ | ✅ |
+
+**Implementasi (9 Nov 2026):** `ensure_api_role()` di `setup_lab` membuat atau memperbarui role `hr_api` (`NOSUPERUSER NOBYPASSRLS`), lalu menerapkan ulang `GRANT` per tabel dan dua policy RLS setiap kali seed berjalan. Hak `hr_api`: `SELECT` pada employees, balances, dan chunks; `SELECT` + `INSERT` pada proposals, requests, dan traces; `UPDATE (confirmed_at)` saja pada proposals (dibutuhkan untuk `FOR UPDATE`); `INSERT` pada tickets. `Settings.api_database_url` membentuk login `hr_api` dari `DATABASE_URL` dengan `make_conninfo`. Bukti: 16 test di [tests/test_database_guards.py](tests/test_database_guards.py), dan `pg_stat_activity` menunjukkan API terhubung sebagai `hr_api`.
 
 **Risiko sisa:** `DATABASE_URL` berisi password `hr_app` tetap ada di environment container API, sehingga penyerang dengan RCE bisa membacanya. Ini dicatat di brief poin 7. Risiko lain: jika pembuatan role gagal, API tidak bisa login. Mitigasinya `/readyz` dan uji dari checkout bersih.
 
@@ -595,6 +600,78 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 
 **Bukti (9 Nov 2026):** Test mentor `test_api.py` hijau, ditambah 10 test di [tests/test_api_contract.py](tests/test_api_contract.py). Uji curl ke server: tanpa token 401, trace Alya oleh Bima 403, summary oleh Alya 403, summary oleh admin 200. Checkpoint 3 lewat Streamlit.
 
+## K22 — Transaksi konfirmasi
+
+**Status:** Diputuskan
+
+**Temuan:**
+
+- Row lock pada proposal hanya mencegah satu proposal dikonfirmasi dua kali. Dua proposal **berbeda** milik pegawai yang sama memiliki baris yang berbeda, sehingga keduanya bisa lolos cek saldo bersamaan (K8: saldo 8, dua proposal 5 hari).
+- [tests/test_actions.py](tests/test_actions.py) memakai proposal tanggal 2–3 November 2026. Jika aturan tanggal divalidasi ulang dengan tanggal hari ini saat konfirmasi, test mentor gagal, karena tanggal itu sudah lewat.
+
+**Keputusan — urutan di dalam satu transaksi:**
+
+1. `pg_advisory_xact_lock(hashtext(employee_id))`: semua konfirmasi milik satu pegawai berjalan bergiliran. Kunci ini tidak membutuhkan hak tabel apa pun.
+2. `SELECT ... FOR UPDATE` pada proposal. Proposal tidak ada atau milik orang lain → `KeyError` (404).
+3. Sudah dikonfirmasi: key sama → replay request yang sama; key lain → konflik.
+4. Key sudah dipakai untuk proposal lain → konflik.
+5. Kedaluwarsa → konflik. Dicek **setelah** idempotency, supaya retry dari konfirmasi yang sebenarnya sudah berhasil tetap mendapat jawabannya.
+6. Overlap dan saldo efektif dicek ulang, karena request lain bisa muncul sejak proposal dibuat.
+7. `INSERT` dengan `pending_manager_review` dan `status_set_by = 'assistant'`, lalu `confirmed_at` diisi.
+
+- Aturan tanggal (masa lalu, urutan, minimal 3 hari kerja) **tidak** dicek ulang. Aturan itu sudah divalidasi saat proposal dibuat, dan TTL 15 menit membatasi pergeseran waktu.
+- `audit_reference` diturunkan dari `request_id`, sehingga replay mengembalikan referensi yang sama.
+- `MemoryRepository` meniru aturan dan urutan yang sama, dengan `threading.Lock` sebagai pengganti lock database.
+
+**Risiko:** Proposal yang dibuat sebelum tengah malam lalu dikonfirmasi sesudahnya bisa melewati batas aturan 3 hari kerja satu hari. Batasnya TTL 15 menit.
+
+**Bukti (9 Nov 2026):**
+
+- 3 test mentor hijau. 7 test konfirmasi baru dijalankan di Memory dan PostgreSQL (sebagai `hr_api`), termasuk dua uji paralel dengan thread: dua proposal 5 hari dengan saldo 8 → tepat satu berhasil; tiga klik bersamaan → satu request dan dua replay.
+- Checkpoint 4 lewat Streamlit: dua klik Konfirmasi menghasilkan satu request.
+
+## K23 — Telemetry dan minimisasi data ke provider
+
+**Status:** Diputuskan
+
+**Temuan:** Audit Step 9 terhadap [lab.md:163](lab.md:163): semua field trace dan semua titik redaction penyimpanan (error, `reason`, tiket, jawaban) sudah ada sejak Step 6. Celahnya satu: pesan pengguna dikirim **mentah** ke OpenAI. Trace kita bersih, tetapi kata “diabetes” tetap keluar ke provider luar.
+
+**Keputusan:**
+
+- Pesan pengguna di-`redact()` **sebelum** dikirim ke provider. Asisten tidak membutuhkan diagnosis, email, telepon, atau token untuk menjawab pertanyaan HR; kebijakan cuti sakit bahkan melarang asisten memintanya. Karena model tidak pernah melihat data itu, model juga tidak bisa menyalinnya ke argumen tool (`reason`, ringkasan tiket).
+- Trace mendapat `timings.model_ms` dan `timings.tools_ms` untuk menyelidiki alert latency (T17) di Step 10.
+
+**Trade-off:** Pola redaction yang terlalu luas bisa ikut menyamarkan informasi yang sebenarnya dibutuhkan. Mitigasinya sudah ada di K17: pola sengaja dibuat sempit, dan diuji dengan kalimat HR normal yang hasilnya harus sama persis.
+
+**Bukti (9 Nov 2026):**
+
+- 5 test di [tests/test_privacy.py](tests/test_privacy.py): PII lewat chat tidak sampai ke provider, jawaban, maupun penyimpanan; PII yang ditulis model ke argumen tool tersamar saat disimpan; error provider tersamar di trace; trace memuat semua field wajib dan tidak memuat data mentah.
+- Uji live: tiga pesan penuh PII (diagnosis, email, nomor HP, permintaan tiket, proposal cuti sakit) dikirim ke API dengan model asli. Hasil pindai database: 0 kecocokan di `traces`, `hr_tickets`, dan `action_proposals`.
+
+## K24 — Evaluator live dan aturan penilaian
+
+**Status:** Diputuskan
+
+**Keputusan:**
+
+| Bagian | Pilihan | Alasan |
+|---|---|---|
+| Cara menjalankan | Klien HTTP terhadap API yang berjalan, dengan token pengguna, persis seperti perintah grader ([docker-delivery.md:38](docker-delivery.md:38)) | Yang dinilai adalah sistem utuh, bukan fungsi internal |
+| Kasus | 15 kasus mentor + `evaluation/regression_cases.json` (overlap, untuk assessment). `data/` tidak diubah. | Sesuai K1 dan [assessment.md:16](assessment.md:16) |
+| Recall@3 | Dokumen yang diharapkan ada di 3 teratas pencarian **pertama**. Trace mendapat `search_rankings` (urutan asli), karena `retrieved_documents` sudah diurutkan abjad. | Tanpa urutan asli, recall bisa terlihat lebih bagus daripada kenyataannya, misalnya kalau model memakai `top_k` 5 |
+| Validitas sitasi | Dicek ulang dari trace oleh evaluator, terpisah dari validasi agent | Penilai tidak boleh percaya pada yang dinilai |
+| Forbidden facts | Dicari di jawaban, sitasi, **dan** trace yang tersimpan | Kebocoran ke trace juga pelanggaran |
+| Hard gate global | Dihitung dari daftar request sungguhan sebelum dan sesudah: tidak ada `approved`, dan tidak ada request tanpa konfirmasi. Opsional `--other-token` untuk uji akses lintas pegawai. | Bukti dari kondisi sistem, bukan dari teks model |
+| K1 | Tanggal `leave-valid-008` diganti otomatis ke jendela dua hari kerja pertama yang bebas dan memenuhi aturan 3 hari kerja. Penggantiannya dicatat di laporan. | Sesuai keputusan K1 |
+| Output | `outputs/evaluation_report.json` + `.md`. Exit code 0 jika GO, 1 jika NO-GO. | Bisa dipakai di CI |
+| Outcome aksi yang ditolak | Jika `prepare_leave_request` ditolak (`blocked`/`error`) dan tidak ada proposal, outcome = `abstained`. Teks penjelasan model tetap ditampilkan. | `leave-past-009` mengharapkan `abstained`, dan memang tidak ada tindakan yang dijalankan |
+
+**Evaluator diuji sendiri:** [tests/test_evaluation.py](tests/test_evaluation.py) membuktikan evaluator bisa gagal: retrieval meleset, sitasi salah, sitasi dari luar run, forbidden fact di trace, tool tidak dipanggil, dan request `approved` yang muncul diam-diam (semua kasus terlihat lulus, tetapi keputusannya NO-GO).
+
+**Risiko:** Setup regression case mengonfirmasi satu hari cuti sakit sungguhan per run. Jalankan evaluasi pada database yang baru di-seed, seperti urutan grader.
+
+**Bukti (9 Nov 2026):** run live → GO. Pass 16/16, hard gate 7/7, recall@3 7/7, sitasi 8/8, pemilihan tool 10/10, p50/p95 3.057/6.765 ms. Detail di [templates/evaluation-report.md](templates/evaluation-report.md).
+
 ## Temuan kecil
 
 Temuan berikut tidak memerlukan keputusan besar.
@@ -610,13 +687,14 @@ Temuan berikut tidak memerlukan keputusan besar.
 | T7 | `ActionProposal` di `src/contracts.py` tidak punya field `policy_version`, padahal kolomnya wajib di `action_proposals` (K9). `contracts.py` tidak boleh diubah. | Selesai 9 Nov: `RULE_POLICY_VERSIONS` di `src/domain.py`, dijaga test drift (K18). |
 | T8 | Package Python `pgvector` tidak ada di `requirements.txt`. | Di Step 3, kirim embedding sebagai teks `'[0.1,0.2,...]'` lalu cast ke `vector` di SQL. |
 | T9 | Diagram menyatakan `/readyz` tidak `ready` saat PostgreSQL mati. Ini masih asumsi. | Selesai 9 Nov: terbukti dengan container dihentikan (503 `not_ready`), sekaligus menemukan bug pemulihan pool (K21). |
-| T10 | Sembilan uji constraint K9 baru ada sebagai script sementara di scratchpad, belum menjadi test di repo. | Pindahkan ke test di Step 8. |
+| T10 | Sembilan uji constraint K9 baru ada sebagai script sementara di scratchpad, belum menjadi test di repo. | Selesai 9 Nov: [tests/test_database_guards.py](tests/test_database_guards.py). |
 | T11 | `.claude/settings.local.json` ter-track git. Isinya daftar izin tool lokal, termasuk path folder pribadi, dan berubah di setiap sesi. | Selesai 9 Nov: masuk `.gitignore` dan dikeluarkan dengan `git rm --cached`. File lokal tetap ada. Versi lama masih tersimpan di riwayat commit sebelumnya, tetapi isinya hanya izin tool dan path, bukan secret. |
 | T12 | [tests/test_actions.py:33-39](tests/test_actions.py:33) menetapkan perilaku konfirmasi: proposal milik orang lain → `KeyError` (dipetakan ke 404), dan proposal yang sudah dikonfirmasi lalu dikonfirmasi lagi dengan key **berbeda** → `ConflictError`, bukan replay. | Ikuti di Step 8. Perilaku ini sejalan dengan `UNIQUE(proposal_id)` di K9. |
 | T14 | Untuk “jatah cuti tahunan”, vector search menaruh `HR-LEAVE-001#sisa-cuti` di peringkat 1, padahal jawaban yang tepat (12 hari) ada di `#hak-dan-saldo` (peringkat 2). Checkpoint 2 hanya meminta `HR-LEAVE-001` di top 3, jadi sudah terpenuhi. Tetapi urutan ini memengaruhi kutipan mana yang dipakai agent. | Selesai 9 Nov: setelah RRF + keyword rerank, `#hak-dan-saldo` naik ke peringkat 1 (K16). |
 | T15 | Retrieval selalu mengembalikan sesuatu, termasuk untuk “Berapa subsidi perjalanan ke Mars?”. Bedanya terlihat di skor: sekitar 0,016 (hanya dari vector) dibanding sekitar 0,04 untuk pertanyaan yang relevan. | Selesai 9 Nov: ambang skor ditolak berdasarkan data; abstain lewat aturan “sudah mencari tapi tanpa sitasi” + instruksi model (K20). |
-| T16 | “Kapan surat dokter diperlukan?” menaruh `HR-OPS-001#kapan-membuat-tiket` di peringkat 1, karena isinya memuat kata “diperlukan” persis seperti di query. Dokumen cuti sakit memakai “memerlukan”, dan konfigurasi `simple` tanpa stemming menganggap keduanya kata yang berbeda (K12). Dokumen yang benar (`HR-LEAVE-002`) di peringkat 2 dan 3, jadi recall@3 tetap terpenuhi. | Pantau di evaluasi Step 10. Kalau jawaban agent ikut salah, pertimbangkan bobot keyword. |
-| T17 | Alert `agent-latency-p95` aktif di database lokal: p95 9.020 ms dari 34 run, di atas ambang 8.000 ms. Uji live mencatat 1,7–7,5 detik per chat, dengan panggilan pertama tiap proses paling lambat. | Step 10: pisahkan latensi model, retrieval, dan database di trace sebelum memutuskan perbaikan. |
+| T16 | “Kapan surat dokter diperlukan?” menaruh `HR-OPS-001#kapan-membuat-tiket` di peringkat 1, karena isinya memuat kata “diperlukan” persis seperti di query. Dokumen cuti sakit memakai “memerlukan”, dan konfigurasi `simple` tanpa stemming menganggap keduanya kata yang berbeda (K12). Dokumen yang benar (`HR-LEAVE-002`) di peringkat 2 dan 3, jadi recall@3 tetap terpenuhi. | Selesai 9 Nov: di evaluasi live, `policy-sick-003` lolos recall@3 dan jawabannya mengutip `HR-LEAVE-002`. Bobot keyword tidak perlu diubah. |
+| T17 | Alert `agent-latency-p95` aktif di database lokal: p95 9.020 ms dari 34 run, di atas ambang 8.000 ms. Uji live mencatat 1,7–7,5 detik per chat, dengan panggilan pertama tiap proses paling lambat. | Selesai 9 Nov: `timings` di trace menunjukkan rata-rata model 3.006 ms vs tool 241 ms (~93% waktu di model). p95 evaluasi 6.765 ms, di bawah ambang. Alert 9 detik berasal dari panggilan pertama tiap proses dan percobaan awal. Perbaikan berikutnya ada di sisi model (model lebih cepat, lebih sedikit turn), bukan di database. |
+| T18 | Test kontrak PostgreSQL memakai data Alya. Setelah Checkpoint 4 membuat request pending sungguhan untuk Alya, 5 test gagal karena saldonya bergeser. Test yang bergantung pada data demo akan rapuh, termasuk di mesin grader kalau aplikasi dicoba sebelum test dijalankan. | Selesai 9 Nov: test yang mengubah data memakai pegawai khusus `EMP-901` dan `EMP-902`, yang dibuat dan dihapus oleh fixture. |
 | T13 | Saat PostgreSQL mati, `PostgresRepository.close()` menunggu sekitar 5 detik per worker pool sebelum menyerah. `health()` sendiri tetap menjawab `False` dalam 2 detik. | Hanya memperlambat shutdown, tidak memengaruhi request. Pantau saat uji kegagalan di Step 10. |
 
 ## Format entri baru
