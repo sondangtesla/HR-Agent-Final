@@ -113,10 +113,21 @@ Hal yang masih kurang sebelum sistem ini layak dipakai perusahaan sungguhan.
 
 ### 7. Hak tulis di database
 
-- **Sekarang:** asisten dan seed memakai satu user database yang sama (`hr_app`). Larangan menulis `approved` dijaga oleh kode dan constraint `assistant_writes_only_pending`.
-- **Masalahnya:** constraint ini menahan bug, tetapi tidak menahan penyerang yang berhasil menguasai aplikasi. Penyerang bisa menulis `status_set_by = 'hr_system'` lalu `status = 'approved'`.
-- **Contoh:** ada celah di API yang membuat orang bisa menjalankan SQL bebas. Ia menyetujui cutinya sendiri dengan menyamar sebagai sistem HR.
-- **Yang dibutuhkan:** user database terpisah. User milik asisten hanya boleh menambah request berstatus pending, sedangkan perubahan status hanya bisa dilakukan oleh user milik sistem HR.
+- **Sekarang (diterapkan di Step 8):** satu tabel `leave_requests` diakses oleh akun database yang berbeda, sehingga siapa penulisnya ditentukan oleh login database, bukan oleh kolom yang diisi aplikasi.
+
+  | Akun database | Dipakai oleh | Hak di `leave_requests` |
+  |---|---|---|
+  | `hr_app` (superuser) | Seed saja, dijalankan developer dari terminal | Semua, termasuk mengimpor data historis `approved` dan `cancelled` |
+  | `hr_api` | Proses API: agent loop dan tools | Hanya menambah baris berstatus `pending_manager_review` (`GRANT INSERT` + Row Level Security). Tidak bisa mengubah atau menghapus baris. |
+  | `hr_system` | Sistem HR, di luar project | Mengubah status menjadi `approved` atau `cancelled`. Hanya dirancang, tidak dibuat. |
+
+  Constraint `assistant_writes_only_pending` tetap ada sebagai lapis tambahan terhadap bug.
+
+- **Masalahnya:** `docker-compose.yml` dari mentor memberi container API satu `DATABASE_URL`, yaitu milik `hr_app`. API memakai URL itu untuk membentuk login `hr_api`, tetapi password superuser tetap tersimpan di environment container API.
+- **Contoh:**
+  - **SQL injection sudah tertahan.** Penyerang menyisipkan `UPDATE leave_requests SET status = 'approved'` lewat celah di API, lalu database menjawab `permission denied`, karena koneksi API adalah `hr_api`.
+  - **RCE belum tertahan.** Penyerang memanfaatkan celah di sebuah library untuk menjalankan kode Python di container API. Ia membaca `DATABASE_URL`, login sebagai `hr_app`, lalu menyetujui cutinya sendiri.
+- **Yang dibutuhkan:** container API tidak boleh memegang password superuser. Seed memakai kredensial terpisah yang hanya ada saat setup, dan password `hr_api` disimpan di secret manager, bukan di kode. Sistem HR diberi akun `hr_system` sendiri.
 
 ### 8. Operasional
 

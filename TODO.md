@@ -7,8 +7,8 @@ Urutan kerja mengikuti Step 1–11 di [lab.md](lab.md) (keputusan K7).
 - **Mulai:** Kamis, 5 November 2026
 - **Target internal:** chat dan saldo berjalan lewat Streamlit pada 13 November; seluruh sistem selesai pada 15 November 2026.
 - **Deadline pengumpulan:** 20 November 2026.
-- **Status saat ini:** Step 1 selesai (Checkpoint 1), kecuali peta failure yang ditunda. Implementasi belum dimulai.
-- **Task berikutnya:** seed idempotent dan `--reset` di `src/setup_lab.py` (Step 2).
+- **Status saat ini:** Step 1–4 selesai, termasuk Checkpoint 2 (peta failure di Step 1 ditunda).
+- **Task berikutnya:** `src/domain.py` (Step 5).
 
 ## Target rilis
 
@@ -89,8 +89,8 @@ Jika Step 1 sudah selesai saat akhir pekan, waktu sisanya dipakai untuk `Postgre
 
 - [x] **`token_hash` di `src/security.py`.** Done when: token yang sama selalu menghasilkan SHA-256 hex yang sama. Terbukti: dua proses terpisah menghasilkan hash 64 karakter yang sama.
 - [x] **Schema di `src/setup_lab.py`.** Done when: extension `vector` aktif; tabel employee, balance, request, proposal, ticket, policy chunk, dan trace terbentuk; status ber-constraint. Terbukti 9 Nov: 7 tabel + `vector` 0.8.7, dijalankan 2x tanpa error, 9 uji constraint K9 sesuai harapan.
-- [ ] **Seed idempotent.** Done when: `python -m src.setup_lab` dua kali tidak menduplikasi data, dan `--reset` tersedia. Token tersimpan sebagai hash. `--reset` menghapus lalu membuat ulang semua tabel, karena `IF NOT EXISTS` tidak mengubah tabel lama (T6). Data historis memakai `status_set_by = 'seed'` (K9).
-- [ ] **`PostgresRepository` dasar.** Done when: pool, `health`, `authenticate`, dan `get_balances` bekerja tanpa interpolasi input ke SQL.
+- [x] **Seed idempotent.** Terbukti 9 Nov: seed 2x tetap 3 pegawai, 6 saldo, 2 request historis; token tersimpan sebagai hash 64 karakter; historis `status_set_by = 'seed'`; seed tanpa `--reset` mempertahankan request buatan aplikasi, sedangkan `--reset` menghapusnya. Done when: `python -m src.setup_lab` dua kali tidak menduplikasi data, dan `--reset` tersedia. Token tersimpan sebagai hash. `--reset` menghapus lalu membuat ulang semua tabel, karena `IF NOT EXISTS` tidak mengubah tabel lama (T6). Data historis memakai `status_set_by = 'seed'` (K9).
+- [x] **`PostgresRepository` dasar.** Done when: pool, `health`, `authenticate`, dan `get_balances` bekerja tanpa interpolasi input ke SQL. Terbukti 9 Nov: token benar → `AuthContext`, token salah/kosong/`' OR '1'='1` → `None`; saldo Alya 3 baris, admin 0; `health()` → `False` dalam 2 detik saat PostgreSQL dimatikan.
 
 Pertanyaan pemandu:
 
@@ -100,10 +100,10 @@ Pertanyaan pemandu:
 
 ## Step 3 — Policy indexing
 
-- [ ] **Lengkapi `.env`.** Done when: `AGENT_MODEL` dan `EMBEDDING_MODEL` terisi, dan `EMBEDDING_DIMENSIONS` sesuai model.
-- [ ] **`chunk_policy`.** Done when: `test_policy_chunk_ids_and_metadata_are_stable` hijau.
-- [ ] **`embed` di `OpenAIProvider`.** Done when: embedding batch berjalan dan dimensi divalidasi sebelum insert.
-- [ ] **Indexing di seed.** Done when: semua chunk tersimpan dengan document ID, section, version, effective date, dan vector. Vector dikirim sebagai teks lalu di-cast ke `vector`, karena package `pgvector` tidak ada (T8).
+- [x] **Lengkapi `.env`.** Done when: `AGENT_MODEL` dan `EMBEDDING_MODEL` terisi, dan `EMBEDDING_DIMENSIONS` sesuai model. Terbukti 9 Nov: panggilan embedding asli mengembalikan 1536 dimensi, sama dengan `EMBEDDING_DIMENSIONS`.
+- [x] **`chunk_policy`.** Done when: `test_policy_chunk_ids_and_metadata_are_stable` hijau. Terbukti 9 Nov: test hijau; seed memasukkan 15 chunk dari 7 dokumen (tanpa embedding); chunk yang isinya berubah kehilangan embedding lama, dan section yang dihapus dari file ikut terhapus (K14).
+- [x] **`embed` di `OpenAIProvider`.** Done when: embedding batch berjalan dan dimensi divalidasi sebelum insert. Terbukti 9 Nov: 15 chunk di-embed dalam satu batch; jumlah dan dimensi vector dicek sebelum disimpan.
+- [x] **Indexing di seed.** Done when: semua chunk tersimpan dengan document ID, section, version, effective date, dan vector. Vector dikirim sebagai teks lalu di-cast ke `vector`, karena package `pgvector` tidak ada (T8). Terbukti 9 Nov: 15/15 chunk punya embedding; seed ulang meng-embed 0 chunk; tanpa API key seed tetap jalan dengan peringatan (K15).
 
 Pertanyaan pemandu:
 
@@ -112,11 +112,11 @@ Pertanyaan pemandu:
 
 ## Step 4 — Hybrid retrieval
 
-- [ ] **`ResilientCache` dan `NullCache`.** Done when: ada test tambahan bahwa Redis mati berperilaku seperti cache miss.
-- [ ] **`lexical_search` dan `vector_search`.** Done when: keduanya mengembalikan `PolicyChunk` dengan metadata lengkap.
-- [ ] **`RetrievalService` (RRF + keyword rerank).** Done when: cache key memuat versi index.
-- [ ] **Pendukung test retrieval.** Done when: pencarian `MemoryRepository` dan `embed` `DeterministicProvider` membuat `test_hybrid_retrieval_prefers_lexical_match` hijau.
-- [ ] **Checkpoint 2.** Done when: “jatah cuti tahunan” menemukan `HR-LEAVE-001` di top 3 dengan metadata lengkap.
+- [x] **`ResilientCache` dan `NullCache`.** Done when: ada test tambahan bahwa Redis mati berperilaku seperti cache miss. Terbukti 9 Nov: 5 test di `tests/test_cache.py`, termasuk circuit breaker; Redis asli dimatikan → pencarian tetap jalan, request ke-2 dan seterusnya 0 ms.
+- [x] **`lexical_search` dan `vector_search`.** Done when: keduanya mengembalikan `PolicyChunk` dengan metadata lengkap.
+- [x] **`RetrievalService` (RRF + keyword rerank).** Done when: cache key memuat versi index. Terbukti: `test_cache_key_contains_index_version`; cache hit 1 ms vs miss 441 ms.
+- [x] **Pendukung test retrieval.** Done when: pencarian `MemoryRepository` dan `embed` `DeterministicProvider` membuat `test_hybrid_retrieval_prefers_lexical_match` hijau.
+- [x] **Checkpoint 2.** Done when: “jatah cuti tahunan” menemukan `HR-LEAVE-001` di top 3 dengan metadata lengkap. Terbukti 9 Nov: `HR-LEAVE-001#hak-dan-saldo` di peringkat 1 dengan section, version, dan effective date; recall@3 = 7/7 pada kasus evaluasi kebijakan.
 
 Pertanyaan pemandu:
 
@@ -172,6 +172,11 @@ Pertanyaan pemandu:
 - [ ] **`confirm_proposal` di kedua repository.** Done when: `pytest tests/test_actions.py` hijau, dan versi PostgreSQL memakai transaksi dengan row lock.
 - [ ] **Cek ulang saldo efektif saat konfirmasi (K8).** Done when: dua proposal 5 hari dengan saldo 8 tidak bisa sama-sama dikonfirmasi.
 - [ ] **Test constraint K9 di repo (T10).** Done when: sembilan kasus dari script sementara 9 Nov menjadi test, termasuk “asisten menulis `approved` ditolak” dan “proposal dikonfirmasi dua kali ditolak”.
+- [ ] **API login sebagai `hr_api` (K9 opsi C, brief poin 7).** Estimasi 2 jam. Done when:
+  - `setup_lab` (login sebagai `hr_app`) membuat role `hr_api` beserta `GRANT` per tabel dan RLS di `leave_requests`, dan tetap aman dijalankan ulang ketika role sudah ada.
+  - API membentuk URL `hr_api` dari `DATABASE_URL` tanpa mengubah `docker-compose.yml`, dan tidak pernah memakai `SET ROLE`.
+  - Test: login sebagai `hr_api` gagal menulis `approved` walaupun `status_set_by` diisi `'hr_system'`, serta gagal `UPDATE`, `DELETE`, dan `DROP TABLE`.
+  - Alur `docker-delivery.md` dari checkout bersih tetap lulus, dan `/readyz` mendeteksi jika API gagal login.
 - [ ] **Semua test non-live.** Done when: `pytest -m "not live"` hijau seluruhnya.
 - [ ] **Checkpoint 4.** Done when: sebelum konfirmasi tidak ada request, dan konfirmasi ganda dengan key sama menghasilkan request ID yang sama.
 
@@ -179,6 +184,7 @@ Pertanyaan pemandu:
 
 - Pada konfirmasi berulang, mana yang harus dicek lebih dulu: idempotency atau expiry? Apa yang terjadi bila pengguna me-retry dengan key yang sama sesudah proposal kedaluwarsa?
 - Dua proposal dengan tanggal sama, keduanya dikonfirmasi. Di mana overlap harus dicek ulang?
+- `hr_app` adalah pemilik tabel. Apakah RLS berlaku untuk pemilik tabel? Kenapa itu tidak masalah selama API tidak pernah login sebagai `hr_app`?
 
 # Sesi Lab 3 — Production readiness
 
@@ -220,6 +226,7 @@ Pertanyaan pemandu:
 - [ ] **Screenshot dan backup output.** Done when: UI, monitoring, dan hasil test tersimpan tanpa secret.
 - [ ] **Demo 5–7 menit.** Done when: latihan dua kali dengan timer, mencakup happy, blocked, dan failure path.
 - [ ] **Uji akhir dari checkout bersih.** Done when: clone baru lulus `submission-checklist.md`.
+- [ ] **Cocokkan brief poin 7 dengan kode.** Done when: jika task `hr_api` di Step 8 selesai, brief tetap; jika tidak selesai, poin 7 dikembalikan ke versi “API masih login sebagai `hr_app`”.
 
 ## Progress log
 
@@ -227,4 +234,4 @@ Pertanyaan pemandu:
 |---|---|---|---|
 | 2026-11-05 | Analisis dokumentasi dan planning; setup Python dan git baseline; preflight test. | K1, K2, K4, dan K5 masih terbuka. | `business_days`. |
 | 2026-11-06 | Jadwal diperbarui: deadline 20 Nov. K1 diputuskan, K5 selesai, K7 diputuskan: urutan mengikuti `lab.md`. Docker dan PostgreSQL/Redis siap; dokumen ter-commit. Belum ada kode baru. | K2 masih terbuka. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Project brief, ADR, dan diagram di Step 1. |
-| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash` dan schema 7 tabel selesai. Pytest tetap 4 passed (sama dengan baseline). | K2 masih menunggu instruktur. `AGENT_MODEL` dan `EMBEDDING_MODEL` di `.env` masih kosong. | Seed idempotent dan `--reset`, lalu `PostgresRepository` dasar. |
+| 2026-11-09 | K8 dan K9 diputuskan. Project brief, ADR, dan draft diagram selesai: Checkpoint 1 terpenuhi. `token_hash`, schema 7 tabel, seed idempotent dan `--reset`, serta `PostgresRepository` dasar selesai: **Step 2 selesai**. **Step 3 selesai**: `chunk_policy`, `.env`, `embed`, dan indexing; 15 chunk ber-embedding. **Step 4 selesai**: cache dengan circuit breaker, hybrid retrieval (RRF + keyword rerank), Checkpoint 2, recall@3 = 7/7. Opsi C (`hr_api`) dijadwalkan di Step 8. Pytest 11 passed (baseline 4). | K2 masih menunggu instruktur. | Step 5: `domain.py`. |

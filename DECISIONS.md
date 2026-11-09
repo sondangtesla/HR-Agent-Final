@@ -18,6 +18,10 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K10 | Cara menyimpan token: SHA-256 tanpa salt | **Diputuskan** | 2026-11-09 |
 | K11 | `proposal_id` dibuat oleh backend | **Diputuskan** | 2026-11-09 |
 | K12 | Pilihan teknis schema lainnya | **Diputuskan** | 2026-11-09 |
+| K13 | Perilaku seed | **Diputuskan** | 2026-11-09 |
+| K14 | Chunking dan sinkronisasi dokumen kebijakan | **Diputuskan** | 2026-11-09 |
+| K15 | Embedding saat seed | **Diputuskan** | 2026-11-09 |
+| K16 | Hybrid retrieval dan cache | **Diputuskan** | 2026-11-09 |
 
 Status yang dipakai:
 
@@ -241,7 +245,7 @@ Status yang dipakai:
 | B. Kolom penanda penulis + CHECK | Bug di kode (database ikut menolak) | Tidak menahan penyerang yang menguasai aplikasi |
 | C. Role database terpisah untuk asisten dan sistem HR | Bug dan penyerang | Sistem HR di luar scope; Compose hanya punya satu user database |
 
-**Keputusan:** A + B. C dicatat sebagai production gap.
+**Keputusan:** A + B sekarang. C dikerjakan di Step 8 (lihat pembaruan di bawah).
 
 - Status yang diizinkan: `pending_manager_review`, `approved`, `cancelled`.
 - Kolom `status_set_by` (`assistant`, `hr_system`, `seed`) mencatat siapa yang **terakhir mengubah status**. CHECK: jika `status_set_by = 'assistant'`, status wajib `pending_manager_review`.
@@ -253,6 +257,35 @@ Status yang dipakai:
 **Alasan:** Pengaman pertama ada di kode, dan pengaman terakhir ada di database. Bug di salah satu lapis tidak langsung menjadi pelanggaran hard gate.
 
 **Risiko:** Status `rejected` belum ada karena tidak muncul di data. Jika sistem HR memakainya, constraint perlu ditambah.
+
+**Pembaruan (9 Nov 2026): opsi C dikerjakan di Step 8 tanpa mengubah `docker-compose.yml`.**
+
+Temuan tambahan:
+
+- `hr_app` adalah `POSTGRES_USER`, sehingga ia superuser yang selalu melewati RLS. API tidak boleh login sebagai `hr_app`.
+- `docker-compose.yml` adalah kontrak dari mentor ([docker-delivery.md:3](docker-delivery.md:3)). Seed dan API berjalan di service `api` yang sama, sehingga memakai `DATABASE_URL` yang sama.
+- `SET ROLE` ditolak sebagai solusi: penyerang yang bisa menjalankan SQL cukup memanggil `RESET ROLE` untuk kembali menjadi superuser.
+
+Bentuk C:
+
+| Akun database | Dipakai oleh | Hak |
+|---|---|---|
+| `hr_app` (superuser) | `setup_lab` saja | Membuat tabel dan role, mengimpor data historis |
+| `hr_api` | Proses API (agent loop dan tools) | Least privilege per tabel. Di `leave_requests`: `SELECT` dan `INSERT` dengan RLS `WITH CHECK (status = 'pending_manager_review')`, tanpa `UPDATE` atau `DELETE`. |
+| `hr_system` | Sistem HR (di luar project) | `UPDATE (status, status_set_by)`. Hanya didokumentasikan, tidak dibuat. |
+
+API membentuk URL login `hr_api` dari `DATABASE_URL` dengan mengganti user dan password-nya. Password `hr_api` tertulis di kode sebagai nilai demo, setara dengan `hr_app:hr_app` di compose.
+
+Ancaman yang tertahan:
+
+| Cara | Bug di kode | SQL injection | RCE di container API |
+|---|:---:|:---:|:---:|
+| B: CHECK `assistant_writes_only_pending` | ✅ | ❌ | ❌ |
+| `SET ROLE` (ditolak) | ✅ | ❌ | ❌ |
+| **C: API login sebagai `hr_api`** | ✅ | ✅ | ❌ |
+| C + compose diubah atau secret manager | ✅ | ✅ | ✅ |
+
+**Risiko sisa:** `DATABASE_URL` berisi password `hr_app` tetap ada di environment container API, sehingga penyerang dengan RCE bisa membacanya. Ini dicatat di brief poin 7. Risiko lain: jika pembuatan role gagal, API tidak bisa login. Mitigasinya `/readyz` dan uji dari checkout bersih.
 
 **Bukti implementasi (9 Nov 2026):** Sembilan uji constraint dijalankan di transaksi yang di-rollback, dan semuanya sesuai harapan. Asisten yang menulis `approved` ditolak oleh `assistant_writes_only_pending`. Sistem HR yang menyetujui request buatan asisten diterima. Proposal yang dikonfirmasi dua kali ditolak oleh `UNIQUE(proposal_id)`.
 
@@ -295,7 +328,7 @@ Status yang dipakai:
 
 **Alasan:** ID acak tidak bisa ditebak, dan pengecekan pemilik tetap menjadi penjaga utama. Model tidak dipercaya untuk membuat identitas apa pun (lihat tabel trust boundary di `templates/architecture.md`).
 
-**Risiko:** Prefix ID (misalnya `PROP-`) belum ditentukan. Tentukan di Step 5 dan pakai secara konsisten.
+**Risiko:** Prefix ID belum ditentukan. [tests/test_actions.py:13](tests/test_actions.py:13) memakai `AP-TEST`, jadi prefix `AP-` (action proposal) paling konsisten dengan test. Tetapkan di Step 5.
 
 ## K12 — Pilihan teknis schema lainnya
 
@@ -310,6 +343,107 @@ Status yang dipakai:
 | `embedding` boleh kosong | Schema dan seed identitas bisa berjalan sebelum API key dan model diisi | Retrieval vector harus mengabaikan baris tanpa embedding |
 | Constraint penting diberi nama | Log error langsung menunjukkan aturan yang dilanggar, misalnya `assistant_writes_only_pending` | Tidak ada |
 | `CREATE ... IF NOT EXISTS` | Schema aman dijalankan berkali-kali | Tidak mengubah tabel yang sudah ada (lihat T6) |
+
+## K13 — Perilaku seed
+
+**Status:** Diputuskan
+
+**Temuan:** Grader menjalankan seed tanpa `--reset`, dan hal itu disengaja agar data tidak terhapus ([docker-delivery.md:26](docker-delivery.md:26)). `employees.json` tidak memuat tanggal berlakunya saldo, padahal `LeaveBalance.as_of_date` wajib.
+
+**Keputusan:**
+
+| Data | Jika sudah ada | Alasan |
+|---|---|---|
+| `employees` | Diperbarui dari JSON (`DO UPDATE`) | JSON adalah sumber kebenaran |
+| `leave_balances` | Diperbarui dari JSON (`DO UPDATE`) | Seed berperan sebagai impor dari sistem HR. Asisten tidak pernah mengubah saldo (K8), jadi tidak ada data asisten yang tertimpa. |
+| Request historis | Dibiarkan (`DO NOTHING`) | Riwayat tidak boleh berubah |
+| Proposal, request baru, tiket, trace | Tidak disentuh | Data pemakaian aplikasi; hanya `--reset` yang menghapusnya |
+
+- `as_of_date` = tanggal saat seed dijalankan, dalam WIB (offset tetap UTC+7). Container Docker memakai UTC, sehingga pukul 04:00 WIB masih tercatat sebagai tanggal kemarin. Indonesia tidak punya daylight saving, jadi offset tetap sudah tepat dan tidak butuh `tzdata`.
+- `--reset`, schema, dan seed berjalan dalam satu transaksi: semuanya berhasil atau tidak ada yang berubah.
+- Data JSON divalidasi dengan model di `contracts.py` (`AuthContext`, `LeaveBalance`, `LeaveRequestView`) sebelum disimpan.
+
+**Risiko:** Pegawai atau tipe saldo yang dihapus dari JSON tidak ikut terhapus dari database tanpa `--reset`. Ini bisa diterima untuk data demo yang tetap.
+
+**Bukti (9 Nov 2026):** Seed dua kali menghasilkan 3 pegawai, 6 saldo, dan 2 request historis. Request uji `LR-TEST` bertahan saat seed dijalankan tanpa `--reset`, lalu hilang setelah `--reset`.
+
+## K14 — Chunking dan sinkronisasi dokumen kebijakan
+
+**Status:** Diputuskan
+
+**Temuan:** Test meminta chunk yang stabil: memproses file yang sama dua kali harus menghasilkan chunk yang sama, dengan `version` berupa string `"2.1"` ([tests/test_agent_reliability.py:71](tests/test_agent_reliability.py:71)). Setiap dokumen di `data/policies/` punya front matter dan beberapa section `##` yang pendek (127–232 karakter).
+
+**Keputusan:**
+
+| Pilihan | Alasan | Trade-off |
+|---|---|---|
+| Satu chunk per section `##` | Section sudah merupakan satu topik utuh dan cukup pendek. Sitasi juga bisa menyebut nama section. | Jika suatu saat section menjadi sangat panjang, perlu dipecah lagi. |
+| `chunk_id` = `document_id#slug-section`, misalnya `HR-LEAVE-001#pengajuan` | Stabil, mudah dibaca, dan tidak berubah jika section baru disisipkan di tengah | Jika section diganti nama, ID-nya ikut berubah. Chunk lama terhapus dan chunk baru di-embed ulang. |
+| Front matter dibaca manual sebagai string | Tidak butuh library YAML. YAML akan membaca `2.1` sebagai angka dan tanggal sebagai `date`, sehingga test gagal. | Hanya mendukung format sederhana `key: value` |
+| `splitlines()` | File dengan akhir baris Windows (CRLF) dan Linux (LF) menghasilkan chunk yang sama | Tidak ada |
+| Gagal keras (`ValueError`) jika front matter kurang, section kosong, atau ada nama section ganda | Dokumen yang rusak ketahuan saat seed, bukan saat pengguna mendapat jawaban aneh | Seed berhenti sampai dokumennya diperbaiki |
+
+**Sinkronisasi saat seed diulang:**
+
+- Section baru atau yang berubah di-upsert.
+- Jika isi, judul, atau nama section berubah, embedding lamanya dikosongkan supaya di-embed ulang. Ini mencegah vector dari teks lama ikut menjawab.
+- Section yang sudah tidak ada di file dihapus dari `policy_chunks`.
+
+Aturan ini menutup sebagian brief Production Gaps poin 6 (pembaruan kebijakan): menjalankan seed ulang sudah cukup untuk menyelaraskan index. Yang belum ada adalah pemicu otomatis dan pengecekan versi yang berlaku.
+
+**Bukti (9 Nov 2026):** Test hijau. Seed dua kali menghasilkan 15 chunk dari 7 dokumen. Pada uji sinkronisasi, chunk yang isinya diubah kembali ke isi file dengan embedding kosong, chunk yang tidak berubah tetap memiliki embedding-nya, dan chunk yang tidak ada di file terhapus.
+
+## K15 — Embedding saat seed
+
+**Status:** Diputuskan
+
+**Temuan:** Embedding membutuhkan jaringan dan API key, yang mungkin tidak tersedia di mesin grader ([docker-delivery.md:32](docker-delivery.md:32)). Setiap panggilan embedding juga ada biayanya.
+
+**Keputusan:**
+
+| Pilihan | Alasan | Trade-off |
+|---|---|---|
+| Seed dibagi dua transaksi: (1) data + teks kebijakan, (2) embedding | Gangguan jaringan tidak membatalkan data pegawai dan saldo. Seed berikutnya cukup melengkapi embedding yang belum ada. | Ada kondisi antara: chunk tersimpan tanpa embedding |
+| Tanpa API key: embedding dilewati dan muncul peringatan, tetapi seed tetap sukses | Alur grader tetap berjalan, dan `/readyz` yang melaporkan sistem belum siap | Vector search tidak bekerja sampai seed diulang dengan key |
+| Hanya chunk dengan `embedding IS NULL` yang di-embed | Seed ulang tidak memanggil OpenAI, dan chunk yang berubah otomatis di-embed ulang (K14) | Tidak ada |
+| Teks yang di-embed = judul + section + isi | Isi section sering tidak menyebut konteksnya. Contohnya, “Sisa cuti” tidak menyebut kata “tahunan”. | Vector sedikit dipengaruhi judul yang sama di semua section satu dokumen |
+| Retry memakai bawaan SDK OpenAI (`max_retries=2`, timeout dari `MODEL_TIMEOUT_SECONDS`) | Error sementara (koneksi, 429, 5xx) dicoba ulang dengan backoff, dengan jumlah yang terbatas | Tidak ada retry tambahan di luar SDK |
+| Jumlah dan dimensi setiap vector dicek sebelum disimpan | Memenuhi “validasi dimensi sebelum insert” di [lab.md:104](lab.md:104), dengan pesan error yang jelas | Tidak ada |
+
+**Bukti (9 Nov 2026):**
+
+- Panggilan embedding asli mengembalikan 1536 dimensi, sama dengan `EMBEDDING_DIMENSIONS`.
+- Seed tanpa API key: 15 chunk tanpa embedding, disertai peringatan. Seed dengan key: 15 chunk di-embed. Seed ulang: 0 chunk di-embed.
+- Query yang katanya tidak ada di dokumen mendapat 0 hasil full-text, tetapi vector search menemukan dokumen yang tepat di peringkat 1: “jatah cuti tahunan” → `HR-LEAVE-001`, “kapan perlu surat dokter” → `HR-LEAVE-002#pemberitahuan`, “boleh WFH berapa hari” → `HR-WORK-001#jadwal`.
+
+## K16 — Hybrid retrieval dan cache
+
+**Status:** Diputuskan
+
+**Temuan:** `websearch_to_tsquery` menggabungkan kata dengan AND. Kata seperti `jatah`, `WFH`, `probation`, dan `surat dokter` tidak ada di dokumen, sehingga “jatah cuti tahunan” menghasilkan 0 hasil full-text. Sebaliknya, vector search menemukan dokumen yang tepat, tetapi untuk “jatah cuti tahunan” menaruh `#sisa-cuti` di atas `#hak-dan-saldo` (T14).
+
+**Keputusan:**
+
+| Bagian | Pilihan | Alasan |
+|---|---|---|
+| Lexical | `to_tsquery('simple', 'kata1 \| kata2 \| ...')` (OR), diurutkan dengan `ts_rank` | Chunk yang cocok dengan sebagian kata tetap ditemukan, dan yang cocok lebih banyak naik ke atas. Kata dibersihkan menjadi `[a-z0-9]` saja, sehingga operator tsquery tidak bisa disisipkan. |
+| Stopword | Daftar pendek kata tanya dan kata sambung (`berapa`, `kapan`, `yang`, ...) di `src/text.py` | Kata tanya tidak membawa makna kebijakan. Daftar sengaja pendek, karena kata yang masuk daftar tidak akan pernah bisa dicari. |
+| Vector | Cosine distance pgvector (`<=>`), hanya chunk yang punya embedding | Mencari makna, bukan kata yang persis sama |
+| Penggabungan | Reciprocal-rank fusion, `k = 60`, 10 kandidat per sumber | Skor `ts_rank` dan cosine punya skala berbeda, sedangkan peringkat bisa dibandingkan langsung |
+| Keyword rerank | Bonus = `1/61 × (porsi kata query yang ada di section + isi)` | Chunk yang benar-benar memuat kata query diutamakan. Judul tidak dihitung, karena semua section satu dokumen berbagi judul yang sama. |
+| Provider embedding gagal | Lanjut dengan lexical saja, dan hasilnya tidak di-cache | Jawaban tetap ada walaupun OpenAI bermasalah. Hasil darurat tidak menempel di cache selama TTL. |
+| Cache key | `retrieval:{POLICY_INDEX_VERSION}:{top_k}:{sha256(query yang dinormalisasi)}` | Reindex dengan versi baru tidak memakai hasil lama. Teks pertanyaan pengguna tidak tersimpan sebagai key Redis. |
+| Isi cache | JSON saja, tidak memakai pickle | Data dari Redis tidak bisa menjalankan kode |
+| Redis mati | Timeout 0,2 detik, lalu circuit breaker: Redis dilewati selama 30 detik setelah gagal. `health()` tetap benar-benar bertanya ke Redis. | Tanpa circuit breaker, setiap request membayar sekitar 0,85 detik selama Redis mati |
+
+**Risiko:** `POLICY_INDEX_VERSION` adalah konfigurasi manual. Jika dokumen berubah tetapi versinya lupa dinaikkan, hasil lama bisa terlayani sampai TTL cache habis (15 menit). Ini terkait brief Production Gaps poin 6.
+
+**Bukti (9 Nov 2026):**
+
+- Checkpoint 2: “jatah cuti tahunan” menghasilkan `HR-LEAVE-001#hak-dan-saldo` di peringkat 1, dengan section, version 2.1, dan effective date 2026-01-01. T14 terselesaikan.
+- Recall@3 = 7/7 pada kasus evaluasi kebijakan.
+- Cache: miss 441 ms, hit 1 ms.
+- Redis asli dimatikan: pencarian tetap memberi hasil yang sama. Dengan circuit breaker, request pertama 419 ms dan request berikutnya 0 ms.
 
 ## Temuan kecil
 
@@ -328,6 +462,11 @@ Temuan berikut tidak memerlukan keputusan besar.
 | T9 | Diagram menyatakan `/readyz` tidak `ready` saat PostgreSQL mati. Ini masih asumsi. | Verifikasi di Step 7. |
 | T10 | Sembilan uji constraint K9 baru ada sebagai script sementara di scratchpad, belum menjadi test di repo. | Pindahkan ke test di Step 8. |
 | T11 | `.claude/settings.local.json` ter-track git. Isinya daftar izin tool lokal, termasuk path folder pribadi, dan berubah di setiap sesi. | Selesai 9 Nov: masuk `.gitignore` dan dikeluarkan dengan `git rm --cached`. File lokal tetap ada. Versi lama masih tersimpan di riwayat commit sebelumnya, tetapi isinya hanya izin tool dan path, bukan secret. |
+| T12 | [tests/test_actions.py:33-39](tests/test_actions.py:33) menetapkan perilaku konfirmasi: proposal milik orang lain → `KeyError` (dipetakan ke 404), dan proposal yang sudah dikonfirmasi lalu dikonfirmasi lagi dengan key **berbeda** → `ConflictError`, bukan replay. | Ikuti di Step 8. Perilaku ini sejalan dengan `UNIQUE(proposal_id)` di K9. |
+| T14 | Untuk “jatah cuti tahunan”, vector search menaruh `HR-LEAVE-001#sisa-cuti` di peringkat 1, padahal jawaban yang tepat (12 hari) ada di `#hak-dan-saldo` (peringkat 2). Checkpoint 2 hanya meminta `HR-LEAVE-001` di top 3, jadi sudah terpenuhi. Tetapi urutan ini memengaruhi kutipan mana yang dipakai agent. | Selesai 9 Nov: setelah RRF + keyword rerank, `#hak-dan-saldo` naik ke peringkat 1 (K16). |
+| T15 | Retrieval selalu mengembalikan sesuatu, termasuk untuk “Berapa subsidi perjalanan ke Mars?”. Bedanya terlihat di skor: sekitar 0,016 (hanya dari vector) dibanding sekitar 0,04 untuk pertanyaan yang relevan. | Step 6: abstain jangan hanya bergantung pada ada atau tidaknya hasil. Pertimbangkan ambang skor, ditambah validasi sitasi. |
+| T16 | “Kapan surat dokter diperlukan?” menaruh `HR-OPS-001#kapan-membuat-tiket` di peringkat 1, karena isinya memuat kata “diperlukan” persis seperti di query. Dokumen cuti sakit memakai “memerlukan”, dan konfigurasi `simple` tanpa stemming menganggap keduanya kata yang berbeda (K12). Dokumen yang benar (`HR-LEAVE-002`) di peringkat 2 dan 3, jadi recall@3 tetap terpenuhi. | Pantau di evaluasi Step 10. Kalau jawaban agent ikut salah, pertimbangkan bobot keyword. |
+| T13 | Saat PostgreSQL mati, `PostgresRepository.close()` menunggu sekitar 5 detik per worker pool sebelum menyerah. `health()` sendiri tetap menjawab `False` dalam 2 detik. | Hanya memperlambat shutdown, tidak memengaruhi request. Pantau saat uji kegagalan di Step 10. |
 
 ## Format entri baru
 
