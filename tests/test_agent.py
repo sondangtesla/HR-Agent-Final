@@ -6,9 +6,10 @@ import time
 from datetime import date
 
 from src.agent import AgentService
-from src.cache import NullCache
+from src.cache import MemoryCache, NullCache
 from src.config import Settings
 from src.contracts import AuthContext, ChatRequest, ModelToolCall, ModelTurn
+from src.conversation import ConversationStore
 from src.providers import DeterministicProvider
 from src.repository import MemoryRepository
 from src.retrieval import RetrievalService
@@ -184,12 +185,16 @@ def test_trace_keeps_no_prompt_or_answer(repository: MemoryRepository) -> None:
     assert trace["employee_id"] == "EMP-001"
 
 
-def test_only_one_ticket_per_run(repository: MemoryRepository) -> None:
+def test_a_model_run_never_inserts_a_ticket(repository: MemoryRepository) -> None:
+    """K25: even two tool calls in one run only (re)write the draft; nothing reaches the database."""
     ticket = ModelToolCall(call_id="t1", name="create_hr_ticket",
-                           arguments={"category": "policy_question", "summary": "Tolong bantu soal cuti"})
+                           arguments={"category": "policy_question", "summary": "Saldo cuti tahunan saya tercatat salah"})
     again = ticket.model_copy(update={"call_id": "t2"})
-    provider = ScriptedProvider([tool_turn([ticket, again]), text_turn("Tiket dibuat.")])
-    response = make_agent(repository, provider).run(ChatRequest(message="buat tiket"), ALYA)
-    assert [c.status for c in response.tool_calls] == ["ok", "blocked"]
-    assert len(repository.tickets) == 1
-    assert response.outcome == "escalated"
+    provider = ScriptedProvider([tool_turn([ticket, again]), text_turn("Tiket sudah dibuat.")])
+    agent = make_agent(repository, provider)
+    agent.tools.conversation = ConversationStore(MemoryCache())
+    response = agent.run(ChatRequest(message="buat tiket"), ALYA)
+    assert [c.status for c in response.tool_calls] == ["ok", "ok"]
+    assert repository.tickets == []
+    assert response.outcome == "action_proposed"
+    assert "BELUM dikirim" in response.answer and "sudah dibuat" not in response.answer

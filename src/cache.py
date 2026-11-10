@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -61,18 +62,45 @@ class ResilientCache:
             logger.warning("cached value is not valid JSON; treating as miss")
             return None
 
-    def set(self, key: str, value: Any, ttl_seconds: int) -> None:
+    def set(self, key: str, value: Any, ttl_seconds: int) -> bool:
+        """Store a value. Returns False when it was not stored, so callers that must not
+        continue without it (ticket drafts, K25) can fail closed."""
         if not self._available() or ttl_seconds <= 0:
-            return
+            return False
         try:
             payload = json.dumps(value)  # JSON only: never pickle, so cached data cannot run code
         except (TypeError, ValueError):
             logger.warning("value is not JSON-serializable; not cached")
-            return
+            return False
         try:
             self.client.set(key, payload, ex=ttl_seconds)
         except (redis.RedisError, OSError) as exc:
             self._trip("set", exc)
+            return False
+        return True
+
+    def pop(self, key: str) -> Any | None:
+        """Read and delete in one atomic step (GETDEL): of two concurrent callers, one gets the
+        value and the other gets None. A failure behaves like "nothing there"."""
+        if not self._available():
+            return None
+        try:
+            raw = self.client.getdel(key)
+        except (redis.RedisError, OSError) as exc:
+            self._trip("pop", exc)
+            return None
+        try:
+            return None if raw is None else json.loads(raw)
+        except ValueError:
+            return None
+
+    def delete(self, key: str) -> None:
+        if not self._available():
+            return
+        try:
+            self.client.delete(key)
+        except (redis.RedisError, OSError) as exc:
+            self._trip("delete", exc)
 
 
 class NullCache(ResilientCache):
@@ -81,3 +109,56 @@ class NullCache(ResilientCache):
     def __init__(self) -> None:
         self.client = None
         self._skip_until = 0.0
+
+
+class MemoryCache(ResilientCache):
+    """In-process stand-in for Redis with the same TTL and atomic pop. Tests only."""
+
+    def __init__(self) -> None:
+        self.client = None
+        self._skip_until = 0.0
+        self._values: dict[str, tuple[float, str]] = {}  # key -> (expires_at, JSON text)
+        self._lock = threading.Lock()
+
+    def health(self) -> bool:
+        return True
+
+    def _live(self, key: str) -> str | None:
+        stored = self._values.get(key)
+        if stored is None:
+            return None
+        if stored[0] <= time.monotonic():
+            del self._values[key]
+            return None
+        return stored[1]
+
+    def get(self, key: str) -> Any | None:
+        with self._lock:
+            raw = self._live(key)
+        return None if raw is None else json.loads(raw)
+
+    def set(self, key: str, value: Any, ttl_seconds: int) -> bool:
+        if ttl_seconds <= 0:
+            return False
+        try:
+            payload = json.dumps(value)
+        except (TypeError, ValueError):
+            return False
+        with self._lock:
+            self._values[key] = (time.monotonic() + ttl_seconds, payload)
+        return True
+
+    def pop(self, key: str) -> Any | None:
+        with self._lock:
+            raw = self._live(key)
+            self._values.pop(key, None)
+        return None if raw is None else json.loads(raw)
+
+    def delete(self, key: str) -> None:
+        with self._lock:
+            self._values.pop(key, None)
+
+    def expire_all(self) -> None:
+        """Tests: behave as if every TTL has run out."""
+        with self._lock:
+            self._values.clear()

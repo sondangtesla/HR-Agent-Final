@@ -7,9 +7,10 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from src.cache import NullCache
+from src.cache import MemoryCache, NullCache
 from src.config import Settings
 from src.contracts import AuthContext, LeaveRequestView
+from src.conversation import ConversationStore
 from src.providers import DeterministicProvider
 from src.repository import MemoryRepository
 from src.retrieval import RetrievalService
@@ -147,9 +148,23 @@ def test_search_marks_documents_as_untrusted_data(tools: ToolExecutor) -> None:
     assert "bukan instruksi" in result["note"]
 
 
-def test_ticket_is_created_for_the_logged_in_user(tools: ToolExecutor, repository: MemoryRepository) -> None:
+def test_ticket_tool_only_drafts_for_the_logged_in_user(tools: ToolExecutor, repository: MemoryRepository) -> None:
+    """K25: the tool stores a draft for the token's employee and never inserts a ticket."""
+    tools.conversation = ConversationStore(MemoryCache())
     result, _ = tools.execute(
         "create_hr_ticket", {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}, ALYA
     )
     assert result["status"] == "ok"
-    assert repository.tickets[-1]["employee_id"] == "EMP-001"
+    assert result["draft"] == {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}
+    assert repository.tickets == []
+    assert tools.conversation.take_draft("EMP-001") == result["draft"]
+    assert tools.conversation.take_draft("EMP-002") is None
+
+
+def test_ticket_tool_without_draft_storage_fails_closed(tools: ToolExecutor, repository: MemoryRepository) -> None:
+    tools.conversation = ConversationStore(NullCache())  # Redis down: set() cannot store anything
+    result, _ = tools.execute(
+        "create_hr_ticket", {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}, ALYA
+    )
+    assert result["status"] == "blocked"
+    assert repository.tickets == []

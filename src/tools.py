@@ -10,7 +10,14 @@ from pydantic import BaseModel, ValidationError
 
 from .config import Settings
 from .contracts import ActionProposal, AuthContext, PrepareLeaveArgs, SearchPolicyArgs, TicketArgs
-from .domain import DomainError, effective_balances, today_wib, validate_leave_request
+from .conversation import ConversationStore
+from .domain import (
+    DomainError,
+    effective_balances,
+    ticket_summary_problem,
+    today_wib,
+    validate_leave_request,
+)
 from .repository import Repository
 from .retrieval import RetrievalService
 from .security import redact
@@ -71,14 +78,20 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     ),
     _function(
         "create_hr_ticket",
-        "Buat tiket ke tim HR untuk pengecualian, konflik kebijakan, masalah data saldo, atau "
-        "pertanyaan tanpa bukti kebijakan. Hanya jika pengguna memintanya dengan jelas.",
+        "Siapkan DRAF tiket ke tim HR untuk pengecualian, konflik kebijakan, masalah data saldo, "
+        "atau pertanyaan tanpa bukti kebijakan. Hanya jika pengguna memintanya dengan jelas. "
+        "Tool ini TIDAK mengirim tiket: sistem menampilkan draf dan tiket baru dikirim setelah "
+        "pengguna membalas konfirmasi eksplisit.",
         {
             "category": {
                 "type": "string",
                 "enum": ["policy_question", "leave_exception", "technical_issue", "privacy"],
             },
-            "summary": {"type": "string", "description": "Ringkasan minimum tanpa data sensitif."},
+            "summary": {
+                "type": "string",
+                "description": "Masalah yang dijelaskan pengguna, ringkas, tanpa data sensitif. "
+                               "Jangan dikarang: tanyakan dulu jika pengguna belum menjelaskannya.",
+            },
         },
     ),
 ]
@@ -110,11 +123,14 @@ class ToolExecutor:
         retrieval: RetrievalService,
         settings: Settings,
         today_factory: Callable[[], date] | None = None,
+        conversation: ConversationStore | None = None,
     ) -> None:
         self.repository = repository
         self.retrieval = retrieval
         self.settings = settings
         self.today_factory = today_factory or today_wib
+        # K25: holds ticket drafts. None means drafts cannot be stored, so no ticket can be sent.
+        self.conversation = conversation
 
     def execute(self, name: str, arguments: dict[str, Any], auth: AuthContext) -> ToolResult:
         """Validate, then run one tool for the logged-in user.
@@ -212,5 +228,17 @@ class ToolExecutor:
         }, proposal
 
     def _create_hr_ticket(self, args: TicketArgs, auth: AuthContext) -> ToolResult:
-        ticket_id = self.repository.create_ticket(auth.employee_id, args.category, args.summary)
-        return {"status": "ok", "ticket_id": ticket_id, "category": args.category}, None
+        """K25: only ever a DRAFT. The insert happens in AgentService, by code, after the user
+        answers the draft with an explicit confirmation in a later message."""
+        problem = ticket_summary_problem(args.summary)
+        if problem:
+            return blocked(problem)
+        summary = redact(args.summary.strip())  # the draft shown is exactly what would be stored
+        if self.conversation is None or not self.conversation.save_draft(auth.employee_id, args.category, summary):
+            return blocked("Draf tiket tidak dapat disimpan saat ini, jadi tiket tidak dibuat. Minta pengguna mencoba lagi nanti.")
+        return {
+            "status": "ok",
+            "draft": {"category": args.category, "summary": summary},
+            "message": "Draf disimpan dan BELUM dikirim. Sistem menampilkan draf ini dan meminta "
+                       "konfirmasi eksplisit pengguna. Jangan katakan tiket sudah dibuat.",
+        }, None

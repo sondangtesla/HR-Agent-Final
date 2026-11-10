@@ -177,8 +177,9 @@ class DeterministicProvider:
         items = [input_data] if isinstance(input_data, str) else list(input_data)
         outputs = [item for item in items if isinstance(item, dict) and item.get("type") == "function_call_output"]
         if not outputs:
+            # The LAST user message: short memory (K25) puts earlier messages before it.
             message = next(
-                (item["content"] for item in items if isinstance(item, dict) and item.get("role") == "user"),
+                (item["content"] for item in reversed(items) if isinstance(item, dict) and item.get("role") == "user"),
                 items[0] if items and isinstance(items[0], str) else "",
             )
             name, arguments = self._choose_tool(message)
@@ -212,6 +213,9 @@ class DeterministicProvider:
             return "prepare_leave_request", {
                 "start_date": dates[0], "end_date": dates[-1], "leave_type": leave_type, "reason": None,
             }
+        if "tiket" in lower:
+            category = "privacy" if "privasi" in lower else "leave_exception" if "pengecualian" in lower else "policy_question"
+            return "create_hr_ticket", {"category": category, "summary": message[:500]}
         if "saldo" in lower:
             return "get_my_leave_balance", {}
         return "search_hr_policy", {"query": message, "top_k": 3}
@@ -233,6 +237,6 @@ class DeterministicProvider:
             return "Saldo cuti Anda: " + ", ".join(parts) + "."
         if "proposal_id" in result:
             return f"{result['message']} Total {result['business_days']} hari kerja."
-        if "ticket_id" in result:
-            return f"Tiket HR {result['ticket_id']} sudah dibuat."
+        if "draft" in result:
+            return "Draf tiket sudah disiapkan dan menunggu konfirmasi Anda."
         return "Selesai."

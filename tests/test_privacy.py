@@ -9,9 +9,10 @@ import json
 from datetime import date
 
 from src.agent import AgentService
-from src.cache import NullCache
+from src.cache import MemoryCache, NullCache
 from src.config import Settings
 from src.contracts import AuthContext, ChatRequest, ModelToolCall, ModelTurn
+from src.conversation import ConversationStore
 from src.providers import DeterministicProvider
 from src.repository import MemoryRepository
 from src.retrieval import RetrievalService
@@ -25,10 +26,11 @@ PII_MESSAGE = (
 )
 
 
-def make_agent(repository: MemoryRepository, provider) -> AgentService:
+def make_agent(repository: MemoryRepository, provider, conversation: ConversationStore | None = None) -> AgentService:
     settings = Settings(model_mode="fake")
     retrieval = RetrievalService(repository, DeterministicProvider(), NullCache(), 0)
-    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23))
+    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23),
+                         conversation=conversation)
     return AgentService(repository, provider, tools, settings)
 
 
@@ -109,12 +111,16 @@ def test_pii_written_by_the_model_into_tools_is_masked_when_stored(repository: M
     ]))
     proposal_agent.run(ChatRequest(message="cuti sakit besok"), ALYA)
 
+    memory = MemoryCache()
     ticket_agent = make_agent(repository, ScriptedProvider([
         tool_turn("create_hr_ticket", {"category": "privacy",
                                        "summary": "Data saya alya.pribadi@example.com, token-bima"}),
         text_turn("Tiket dibuat."),
-    ]))
-    ticket_agent.run(ChatRequest(message="buat tiket"), ALYA)
+    ]), conversation=ConversationStore(memory))
+    draft = ticket_agent.run(ChatRequest(message="buat tiket"), ALYA)
+    assert_no_secrets(draft.answer, "the ticket draft shown to the user")
+    assert_no_secrets(json.dumps(memory._values, ensure_ascii=False), "Redis draft and memory")
+    ticket_agent.run(ChatRequest(message="ya"), ALYA)  # K25: stored only after an explicit yes
 
     assert repository.proposals and repository.tickets
     assert_no_secrets(everything_stored(repository), "stored proposals and tickets")

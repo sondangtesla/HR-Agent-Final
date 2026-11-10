@@ -26,6 +26,7 @@ from .contracts import (
     LeaveRequestView,
     ProblemDetail,
 )
+from .conversation import ConversationStore
 from .monitoring import evaluate_alerts, load_rules
 from .providers import DeterministicProvider, ModelProvider, OpenAIProvider, UnavailableProvider
 from .repository import ConflictError, PostgresRepository, Repository
@@ -61,7 +62,8 @@ def build_runtime(settings: Settings) -> Runtime:
         repository, provider, cache, settings.retrieval_cache_ttl_seconds,
         index_version=settings.policy_index_version,
     )
-    tools = ToolExecutor(repository, retrieval, settings)
+    # Memory and ticket drafts (K25) share the Redis client; if Redis dies, no ticket can be sent.
+    tools = ToolExecutor(repository, retrieval, settings, conversation=ConversationStore(cache))
     return Runtime(repository, cache, provider, AgentService(repository, provider, tools, settings))
 
 
