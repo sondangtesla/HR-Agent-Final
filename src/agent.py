@@ -67,6 +67,13 @@ ABSTAIN_FAILURE = (
     "Tidak ada tindakan yang dijalankan. Silakan coba lagi nanti."
 )
 
+DRAFT_DROPPED_NOTE = """
+Status sistem: draf tiket HR sebelumnya sudah DIBATALKAN dan tidak dikirim, karena pesan terbaru
+pengguna bukan konfirmasi eksplisit. Draf itu tidak bisa dikirim lagi. Jangan katakan draf diterima,
+diproses, atau terkirim, dan jangan meminta pengguna membalas "ya" untuk draf itu. Jika pengguna
+ingin mengubah atau tetap mengirim tiketnya, panggil create_hr_ticket lagi untuk membuat draf baru.
+"""
+
 TICKET_CATEGORY_LABELS = {
     "policy_question": "Pertanyaan kebijakan",
     "leave_exception": "Pengecualian cuti",
@@ -161,17 +168,21 @@ class AgentService:
         # K25: a pending ticket draft is sent ONLY here, by code, and only when the whole
         # message is an explicit yes. The model is not asked, so it cannot be talked into it.
         # Any other message drops the draft: a later "ya" can never send an old draft.
+        dropped_draft = None
         if conversation is not None:
             if is_explicit_confirmation(request.message):
                 draft = conversation.take_draft(auth.employee_id)
                 if draft is not None:
                     return self._send_confirmed_ticket(draft, message, auth, trace_id, started)
             else:
-                conversation.discard_draft(auth.employee_id)
+                dropped_draft = conversation.take_draft(auth.employee_id)
 
         instructions = SYSTEM_INSTRUCTIONS.format(
             today=self.tools.today_factory().isoformat(), display_name=auth.display_name
         )
+        if dropped_draft is not None:
+            # Without this the model may tell the user the draft is "being processed".
+            instructions += DRAFT_DROPPED_NOTE
         # store=False: the whole conversation is resent every turn, built from these items.
         # Short memory (K25) comes first: already redacted, without tool content.
         history = conversation.history(auth.employee_id) if conversation is not None else []
