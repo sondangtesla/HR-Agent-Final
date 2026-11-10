@@ -23,6 +23,7 @@ from .domain import estimate_cost, is_explicit_confirmation
 from .providers import ModelProvider
 from .repository import Repository
 from .security import redact, stable_safety_id
+from .conversation import ConversationStore, conversation_scope
 from .tools import TOOL_SCHEMAS, ToolExecutor
 
 logger = logging.getLogger(__name__)
@@ -149,11 +150,16 @@ def guard_output(text: str, auth: AuthContext) -> str:
 
 
 class AgentService:
-    def __init__(self, repository: Repository, provider: ModelProvider, tools: ToolExecutor, settings: Settings) -> None:
+    def __init__(
+        self, repository: Repository, provider: ModelProvider, tools: ToolExecutor, settings: Settings,
+        conversation: ConversationStore | None = None,
+    ) -> None:
         self.repository = repository
         self.provider = provider
         self.tools = tools
         self.settings = settings
+        # K25: short memory and ticket drafts. None: no memory, and no ticket can be drafted or sent.
+        self.conversation = conversation
 
     def run(self, request: ChatRequest, auth: AuthContext) -> ChatResponse:
         s = self.settings
@@ -163,7 +169,9 @@ class AgentService:
         # Data minimisation: the provider never needs a diagnosis, email, phone, or token to
         # answer HR questions, so they are masked BEFORE the message leaves our system.
         message = redact(request.message)
-        conversation = self.tools.conversation
+        conversation = self.conversation
+        # The employee always comes from the token; conversation_id only separates their own chats.
+        scope = conversation_scope(auth.employee_id, request.conversation_id)
 
         # K25: a pending ticket draft is sent ONLY here, by code, and only when the whole
         # message is an explicit yes. The model is not asked, so it cannot be talked into it.
@@ -171,11 +179,11 @@ class AgentService:
         dropped_draft = None
         if conversation is not None:
             if is_explicit_confirmation(request.message):
-                draft = conversation.take_draft(auth.employee_id)
+                draft = conversation.take_draft(scope)
                 if draft is not None:
-                    return self._send_confirmed_ticket(draft, message, auth, trace_id, started)
+                    return self._send_confirmed_ticket(draft, message, auth, scope, trace_id, started)
             else:
-                dropped_draft = conversation.take_draft(auth.employee_id)
+                dropped_draft = conversation.take_draft(scope)
 
         instructions = SYSTEM_INSTRUCTIONS.format(
             today=self.tools.today_factory().isoformat(), display_name=auth.display_name
@@ -185,7 +193,7 @@ class AgentService:
             instructions += DRAFT_DROPPED_NOTE
         # store=False: the whole conversation is resent every turn, built from these items.
         # Short memory (K25) comes first: already redacted, without tool content.
-        history = conversation.history(auth.employee_id) if conversation is not None else []
+        history = conversation.history(scope) if conversation is not None else []
         items: list[Any] = [*history, {"role": "user", "content": message}]
         model_ms = tools_ms = 0
 
@@ -237,6 +245,13 @@ class AgentService:
                 tool_count += 1
                 tool_started = time.perf_counter()
                 result, new_proposal = self.tools.execute(call.name, call.arguments, auth)
+                if call.name == "create_hr_ticket" and result["status"] == "ok" and not (
+                    conversation is not None
+                    and conversation.save_draft(scope, result["draft"]["category"], result["draft"]["summary"])
+                ):
+                    # Fail closed: a draft that cannot be stored can never be confirmed, so do not show one.
+                    result = {"status": "blocked", "reason": "Draf tiket tidak dapat disimpan saat ini, jadi "
+                              "tiket tidak dibuat. Minta pengguna mencoba lagi nanti."}
                 tool_duration = int((time.perf_counter() - tool_started) * 1000)
                 tools_ms += tool_duration
                 tool_summaries.append(ToolCallSummary(name=call.name, status=result["status"], duration_ms=tool_duration))
@@ -271,7 +286,7 @@ class AgentService:
             if shown_summary != ticket_draft["summary"]:
                 # Keep "what the user confirms is what gets stored" after the output guard masks it.
                 ticket_draft = {**ticket_draft, "summary": shown_summary}
-                conversation.save_draft(auth.employee_id, ticket_draft["category"], shown_summary)
+                conversation.save_draft(scope, ticket_draft["category"], shown_summary)
             outcome, answer = Outcome.action_proposed, ticket_draft_text(ticket_draft)
             stop_reason = stop_reason or "ticket_draft"
         else:
@@ -294,10 +309,10 @@ class AgentService:
 
         if final_text is None and ticket_draft is not None and conversation is not None:
             # The run failed after drafting: the user never saw the draft, so it must not be sendable.
-            conversation.discard_draft(auth.employee_id)
+            conversation.take_draft(scope)
 
         return self._finish(
-            auth=auth, trace_id=trace_id, started=started, message=message,
+            auth=auth, scope=scope, trace_id=trace_id, started=started, message=message,
             outcome=outcome, answer=answer, stop_reason=stop_reason, turns=turns,
             tool_summaries=tool_summaries, citations=citations, proposal=proposal,
             retrieved=sorted(retrieved), search_rankings=search_rankings,
@@ -306,7 +321,7 @@ class AgentService:
         )
 
     def _send_confirmed_ticket(
-        self, draft: dict[str, str], message: str, auth: AuthContext, trace_id: str, started: float
+        self, draft: dict[str, str], message: str, auth: AuthContext, scope: str, trace_id: str, started: float
     ) -> ChatResponse:
         """Insert exactly the draft the user saw. Called only after an explicit yes (K25)."""
         tool_started = time.perf_counter()
@@ -314,11 +329,11 @@ class AgentService:
             ticket_id = self.repository.create_ticket(auth.employee_id, draft["category"], draft["summary"])
         except Exception:
             # Database down: nothing was stored. Put the draft back so the user can say "ya" again.
-            self.tools.conversation.save_draft(auth.employee_id, draft["category"], draft["summary"])
+            self.conversation.save_draft(scope, draft["category"], draft["summary"])
             raise
         duration = int((time.perf_counter() - tool_started) * 1000)
         return self._finish(
-            auth=auth, trace_id=trace_id, started=started, message=message,
+            auth=auth, scope=scope, trace_id=trace_id, started=started, message=message,
             outcome=Outcome.escalated, answer=ticket_created_text(ticket_id, draft),
             stop_reason="ticket_confirmed", turns=0,
             tool_summaries=[ToolCallSummary(name="create_hr_ticket", status="ok", duration_ms=duration)],
@@ -327,7 +342,7 @@ class AgentService:
         )
 
     def _finish(
-        self, *, auth: AuthContext, trace_id: str, started: float, message: str,
+        self, *, auth: AuthContext, scope: str, trace_id: str, started: float, message: str,
         outcome: Outcome, answer: str, stop_reason: str | None, turns: int,
         tool_summaries: list[ToolCallSummary], citations: list[Citation], proposal: ActionProposal | None,
         retrieved: list[str], search_rankings: list[list[str]],
@@ -361,8 +376,8 @@ class AgentService:
             "model_mode": s.model_mode,
         })
         shown = guard_output(answer, auth)
-        if self.tools.conversation is not None:
-            self.tools.conversation.remember(auth.employee_id, message, shown)
+        if self.conversation is not None:
+            self.conversation.remember(scope, message, shown)
         return ChatResponse(
             answer=shown,
             outcome=outcome,

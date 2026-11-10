@@ -29,9 +29,8 @@ PII_MESSAGE = (
 def make_agent(repository: MemoryRepository, provider, conversation: ConversationStore | None = None) -> AgentService:
     settings = Settings(model_mode="fake")
     retrieval = RetrievalService(repository, DeterministicProvider(), NullCache(), 0)
-    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23),
-                         conversation=conversation)
-    return AgentService(repository, provider, tools, settings)
+    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23))
+    return AgentService(repository, provider, tools, settings, conversation=conversation)
 
 
 class RecordingProvider(DeterministicProvider):

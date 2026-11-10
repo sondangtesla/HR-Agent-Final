@@ -62,9 +62,10 @@ def build_runtime(settings: Settings) -> Runtime:
         repository, provider, cache, settings.retrieval_cache_ttl_seconds,
         index_version=settings.policy_index_version,
     )
+    tools = ToolExecutor(repository, retrieval, settings)
     # Memory and ticket drafts (K25) share the Redis client; if Redis dies, no ticket can be sent.
-    tools = ToolExecutor(repository, retrieval, settings, conversation=ConversationStore(cache))
-    return Runtime(repository, cache, provider, AgentService(repository, provider, tools, settings))
+    agent = AgentService(repository, provider, tools, settings, conversation=ConversationStore(cache))
+    return Runtime(repository, cache, provider, agent)
 
 
 class ApiError(Exception):

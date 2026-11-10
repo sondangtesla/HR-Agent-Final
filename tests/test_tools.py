@@ -7,10 +7,9 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from src.cache import MemoryCache, NullCache
+from src.cache import NullCache
 from src.config import Settings
 from src.contracts import AuthContext, LeaveRequestView
-from src.conversation import ConversationStore
 from src.providers import DeterministicProvider
 from src.repository import MemoryRepository
 from src.retrieval import RetrievalService
@@ -153,23 +152,18 @@ def test_search_marks_documents_as_untrusted_data(tools: ToolExecutor) -> None:
     assert "bukan instruksi" in result["note"]
 
 
-def test_ticket_tool_only_drafts_for_the_logged_in_user(tools: ToolExecutor, repository: MemoryRepository) -> None:
-    """K25: the tool stores a draft for the token's employee and never inserts a ticket."""
-    tools.conversation = ConversationStore(MemoryCache())
+def test_ticket_tool_only_returns_a_draft(tools: ToolExecutor, repository: MemoryRepository) -> None:
+    """K25: the tool validates and returns a redacted draft; it never inserts a ticket.
+    Storing the draft and sending it are the agent's job (tests/test_ticket_confirmation.py)."""
     result, _ = tools.execute(
         "create_hr_ticket", {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}, ALYA
     )
     assert result["status"] == "ok"
     assert result["draft"] == {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}
     assert repository.tickets == []
-    assert tools.conversation.take_draft("EMP-001") == result["draft"]
-    assert tools.conversation.take_draft("EMP-002") is None
 
 
-def test_ticket_tool_without_draft_storage_fails_closed(tools: ToolExecutor, repository: MemoryRepository) -> None:
-    tools.conversation = ConversationStore(NullCache())  # Redis down: set() cannot store anything
-    result, _ = tools.execute(
-        "create_hr_ticket", {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}, ALYA
-    )
-    assert result["status"] == "blocked"
+def test_ticket_tool_refuses_an_empty_summary(tools: ToolExecutor, repository: MemoryRepository) -> None:
+    result, _ = tools.execute("create_hr_ticket", {"category": "policy_question", "summary": "tolong buatkan tiket"}, ALYA)
+    assert result["status"] == "blocked" and "Tanyakan" in result["reason"]
     assert repository.tickets == []

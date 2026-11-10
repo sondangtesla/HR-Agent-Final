@@ -192,7 +192,7 @@ def test_a_model_run_never_inserts_a_ticket(repository: MemoryRepository) -> Non
     again = ticket.model_copy(update={"call_id": "t2"})
     provider = ScriptedProvider([tool_turn([ticket, again]), text_turn("Tiket sudah dibuat.")])
     agent = make_agent(repository, provider)
-    agent.tools.conversation = ConversationStore(MemoryCache())
+    agent.conversation = ConversationStore(MemoryCache())
     response = agent.run(ChatRequest(message="buat tiket"), ALYA)
     assert [c.status for c in response.tool_calls] == ["ok", "ok"]
     assert repository.tickets == []

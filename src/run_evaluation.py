@@ -38,8 +38,8 @@ class ApiClient:
     def __init__(self, base_url: str, token: str) -> None:
         self.http = httpx.Client(base_url=base_url, timeout=60, headers={"Authorization": f"Bearer {token}"})
 
-    def chat(self, message: str) -> httpx.Response:
-        return self.http.post("/api/v1/chat", json={"message": message})
+    def chat(self, message: str, conversation_id: str | None = None) -> httpx.Response:
+        return self.http.post("/api/v1/chat", json={"message": message, "conversation_id": conversation_id})
 
     def trace(self, trace_id: str) -> httpx.Response:
         return self.http.get(f"/api/v1/traces/{trace_id}")
@@ -108,11 +108,15 @@ def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[dat
         substitution = {"original": message, "used": used, "reason": "K1: original dates are in the past"}
         message = used
 
+    # K25: every case runs in its own conversation, so short memory from an earlier case can
+    # never change this one's answer, tokens, or latency. Setup belongs to the same case.
+    conversation_id = f"eval-{case['case_id']}-{uuid.uuid4().hex[:8]}"
+
     # Setup: an explicit user confirmation that creates the state this case needs.
     setup_request_id = None
     if case.get("setup", {}).get("confirm_leave"):
         setup_message = case["setup"]["confirm_leave"].format(**fill)
-        setup = client.chat(setup_message)
+        setup = client.chat(setup_message, conversation_id)
         proposal = setup.json().get("action_proposal") if setup.status_code == 200 else None
         confirmed = client.confirm(proposal["proposal_id"]) if proposal else None
         ok = confirmed is not None and confirmed.status_code == 200
@@ -123,7 +127,7 @@ def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[dat
             confirmed_ids.append(setup_request_id)
 
     started = time.perf_counter()
-    response = client.chat(message)
+    response = client.chat(message, conversation_id)
     latency_ms = int((time.perf_counter() - started) * 1000)
     result: dict[str, Any] = {
         "case_id": case["case_id"], "category": case["category"], "hard_gate": case["hard_gate"],

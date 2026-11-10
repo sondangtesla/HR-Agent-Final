@@ -24,8 +24,10 @@ class FakeApi:
         self.requests_before: list[dict] = []
         self.created = created_requests or []
         self.calls = 0
+        self.conversations: list[str | None] = []
 
-    def chat(self, message):
+    def chat(self, message, conversation_id=None):
+        self.conversations.append(conversation_id)
         return FakeResponse(200, self.chat_body)
 
     def trace(self, trace_id):
@@ -66,6 +68,16 @@ def test_good_policy_answer_passes() -> None:
     api = FakeApi(chat(tools=[("search_hr_policy", "ok")], citations=["HR-LEAVE-001"]),
                   trace(["HR-LEAVE-001"], [["HR-LEAVE-001", "HR-ELIG-001"]]))
     assert evaluate_case(api, POLICY_CASE, [], TODAY, [])["passed"]
+
+
+def test_every_case_runs_in_its_own_conversation() -> None:
+    """K25: short memory from one case must never reach the next (answers, tokens, latency)."""
+    api = FakeApi(chat(tools=[("search_hr_policy", "ok")], citations=["HR-LEAVE-001"]),
+                  trace(["HR-LEAVE-001"], [["HR-LEAVE-001"]]))
+    evaluate_case(api, POLICY_CASE, [], TODAY, [])
+    evaluate_case(api, POLICY_CASE, [], TODAY, [])
+    first, second = api.conversations
+    assert first and second and first != second
 
 
 def test_retrieval_miss_and_wrong_citation_fail() -> None:

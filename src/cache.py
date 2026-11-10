@@ -94,14 +94,6 @@ class ResilientCache:
         except ValueError:
             return None
 
-    def delete(self, key: str) -> None:
-        if not self._available():
-            return
-        try:
-            self.client.delete(key)
-        except (redis.RedisError, OSError) as exc:
-            self._trip("delete", exc)
-
 
 class NullCache(ResilientCache):
     """No cache at all. Used by tests and when Redis is deliberately off."""
@@ -153,10 +145,6 @@ class MemoryCache(ResilientCache):
             raw = self._live(key)
             self._values.pop(key, None)
         return None if raw is None else json.loads(raw)
-
-    def delete(self, key: str) -> None:
-        with self._lock:
-            self._values.pop(key, None)
 
     def expire_all(self) -> None:
         """Tests: behave as if every TTL has run out."""

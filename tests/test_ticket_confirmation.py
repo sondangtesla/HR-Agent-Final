@@ -63,9 +63,9 @@ def ticket_call(summary: str = SUMMARY, category: str = "leave_exception", call_
 def make_agent(repository: MemoryRepository, provider, cache=None) -> AgentService:
     settings = Settings(model_mode="fake")
     retrieval = RetrievalService(repository, DeterministicProvider(), NullCache(), 0)
-    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23),
-                         conversation=ConversationStore(cache if cache is not None else MemoryCache()))
-    return AgentService(repository, provider, tools, settings)
+    tools = ToolExecutor(repository, retrieval, settings, today_factory=lambda: date(2026, 9, 23))
+    return AgentService(repository, provider, tools, settings,
+                        conversation=ConversationStore(cache if cache is not None else MemoryCache()))
 
 
 def drafting_provider(*later: ModelTurn) -> ScriptedProvider:
@@ -271,6 +271,35 @@ def test_memory_lets_the_model_see_the_previous_exchange(repository: MemoryRepos
     assert second[0] == {"role": "user", "content": "tolong buatkan tiket HR"}
     assert second[1] == {"role": "assistant", "content": "Tiket ini tentang apa?"}
     assert second[-1] == {"role": "user", "content": SUMMARY}
+
+
+def test_a_draft_belongs_to_its_conversation(repository: MemoryRepository) -> None:
+    agent = make_agent(repository, drafting_provider(text_turn("Tidak ada draf di sini.")))
+    agent.run(ChatRequest(message="buatkan tiket soal saldo", conversation_id="chat-1"), ALYA)
+    agent.run(ChatRequest(message="ya", conversation_id="chat-2"), ALYA)
+    assert repository.tickets == []
+    agent.run(ChatRequest(message="ya", conversation_id="chat-1"), ALYA)
+    assert len(repository.tickets) == 1
+
+
+def test_memory_is_per_conversation(repository: MemoryRepository) -> None:
+    """The evaluator gives every case its own conversation_id, so cases cannot leak into each other."""
+    provider = ScriptedProvider([text_turn("Jawaban pertama.")])
+    agent = make_agent(repository, provider)
+    agent.run(ChatRequest(message="kasus satu", conversation_id="eval-a"), ALYA)
+    agent.run(ChatRequest(message="kasus dua", conversation_id="eval-b"), ALYA)
+    agent.run(ChatRequest(message="lanjutan kasus satu", conversation_id="eval-a"), ALYA)
+    assert provider.calls[1]["input_data"] == [{"role": "user", "content": "kasus dua"}]
+    assert provider.calls[2]["input_data"][0] == {"role": "user", "content": "kasus satu"}
+
+
+def test_conversation_id_cannot_reach_another_employee(repository: MemoryRepository) -> None:
+    """Same conversation_id, different token: still two separate memories."""
+    provider = ScriptedProvider([text_turn("Jawaban untuk Alya.")])
+    agent = make_agent(repository, provider)
+    agent.run(ChatRequest(message="pertanyaan rahasia Alya", conversation_id="shared"), ALYA)
+    agent.run(ChatRequest(message="halo", conversation_id="shared"), BIMA)
+    assert provider.calls[1]["input_data"] == [{"role": "user", "content": "halo"}]
 
 
 def test_memory_is_per_employee(repository: MemoryRepository) -> None:
