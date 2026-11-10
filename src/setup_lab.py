@@ -51,8 +51,28 @@ CREATE TABLE IF NOT EXISTS leave_balances (
     leave_type      TEXT NOT NULL CHECK (leave_type IN {LEAVE_TYPES}),
     available_days  INTEGER NOT NULL CHECK (available_days >= 0),
     as_of_date      DATE NOT NULL,
+    updated_at      TIMESTAMPTZ,
     PRIMARY KEY (employee_id, leave_type)
 );
+-- T6: CREATE TABLE IF NOT EXISTS does not change an existing table.
+ALTER TABLE leave_balances ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+
+-- K26: only the table owner (the HR system / seed) may RAISE a balance. Every other login,
+-- including hr_api, can only lower it, so even a bug in the API cannot give anyone more leave.
+-- updated_at is set here, not by the application, as the audit trail of every change.
+CREATE OR REPLACE FUNCTION guard_balance_update() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.available_days > OLD.available_days
+       AND current_user <> (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = TG_RELID) THEN
+        RAISE EXCEPTION 'saldo cuti hanya boleh dikurangi oleh login ini'
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    NEW.updated_at := now();
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS leave_balances_guard ON leave_balances;
+CREATE TRIGGER leave_balances_guard BEFORE UPDATE ON leave_balances
+    FOR EACH ROW EXECUTE FUNCTION guard_balance_update();
 
 CREATE TABLE IF NOT EXISTS action_proposals (
     proposal_id         TEXT PRIMARY KEY,
@@ -136,6 +156,22 @@ CREATE TABLE IF NOT EXISTS traces (
 );
 
 CREATE INDEX IF NOT EXISTS traces_created_at_idx ON traces (created_at);
+
+-- K26: the days taken at confirmation go back when the HR system cancels the request.
+-- Only requests made through the assistant (proposal_id set) were ever deducted here;
+-- seeded history was not, so it is never refunded. hr_api cannot change status at all.
+CREATE OR REPLACE FUNCTION refund_cancelled_leave() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE leave_balances SET available_days = available_days + OLD.business_days
+    WHERE employee_id = OLD.employee_id AND leave_type = OLD.leave_type;
+    RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS leave_requests_refund ON leave_requests;
+CREATE TRIGGER leave_requests_refund AFTER UPDATE OF status ON leave_requests
+    FOR EACH ROW
+    WHEN (OLD.status IN ('pending_manager_review', 'approved')
+          AND NEW.status = 'cancelled' AND OLD.proposal_id IS NOT NULL)
+    EXECUTE FUNCTION refund_cancelled_leave();
 """
 
 
@@ -181,6 +217,7 @@ REVOKE ALL ON employees, leave_balances, action_proposals, leave_requests,
 GRANT SELECT ON employees, leave_balances, policy_chunks TO {role};
 GRANT SELECT, INSERT ON action_proposals, leave_requests, traces TO {role};
 GRANT UPDATE (confirmed_at) ON action_proposals TO {role};
+GRANT UPDATE (available_days) ON leave_balances TO {role};  -- K26: lowering only, see the trigger
 GRANT INSERT ON hr_tickets TO {role};
 
 ALTER TABLE leave_requests ENABLE ROW LEVEL SECURITY;
@@ -265,7 +302,11 @@ def drop_tables(conn: psycopg.Connection) -> None:
 
 
 def seed_employees(conn: psycopg.Connection, employees: list[dict[str, Any]], as_of: date) -> None:
-    """Upsert identities and balances. The JSON file is the source of truth for both."""
+    """Upsert identities; insert balances only when missing.
+
+    K26: confirmations deduct from the stored balance, so after the first seed the database,
+    not the JSON file, is the source of truth for balances. --reset restores the JSON values.
+    """
     for row in employees:
         identity = AuthContext.model_validate(row)  # validates employee_id, display_name, role
         token = row.get("token")
@@ -288,9 +329,7 @@ def seed_employees(conn: psycopg.Connection, employees: list[dict[str, Any]], as
                 """
                 INSERT INTO leave_balances (employee_id, leave_type, available_days, as_of_date)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (employee_id, leave_type) DO UPDATE SET
-                    available_days = EXCLUDED.available_days,
-                    as_of_date = EXCLUDED.as_of_date
+                ON CONFLICT (employee_id, leave_type) DO NOTHING
                 """,
                 (identity.employee_id, balance.leave_type, balance.available_days, balance.as_of_date),
             )

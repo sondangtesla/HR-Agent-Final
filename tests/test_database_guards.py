@@ -2,6 +2,7 @@
 
 - K9: CHECK and UNIQUE constraints on leave_requests (run as the table owner).
 - K9 option C: what the API login (hr_api) may and may not do.
+- K26: hr_api may lower a balance but never raise it; HR cancellation refunds the days.
 
 Every case runs in a transaction that is rolled back. Skipped when PostgreSQL is not seeded.
 """
@@ -164,3 +165,67 @@ def test_api_cannot_change_what_it_does_not_own(api, statement: str) -> None:
 def test_api_can_read_what_it_needs(api) -> None:
     for table in ("employees", "leave_balances", "policy_chunks", "leave_requests", "action_proposals", "traces"):
         api.execute(f"SELECT 1 FROM {table} LIMIT 1")  # constant table names
+
+
+# --- K26: the API may lower a balance, never raise it, and touches nothing else ---
+
+def annual(conn) -> int:
+    return conn.execute(
+        "SELECT available_days FROM leave_balances WHERE employee_id = 'EMP-001' AND leave_type = 'annual'"
+    ).fetchone()[0]
+
+
+def test_api_can_lower_a_balance_and_the_change_is_stamped(api) -> None:
+    before = annual(api)
+    stamped = api.execute(  # rolled back by the fixture
+        """UPDATE leave_balances SET available_days = available_days - 1
+           WHERE employee_id = 'EMP-001' AND leave_type = 'annual' RETURNING updated_at"""
+    ).fetchone()[0]
+    assert annual(api) == before - 1
+    assert stamped is not None  # set by the trigger, not by the caller
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE leave_balances SET available_days = available_days + 1 WHERE employee_id = 'EMP-001'",
+        "UPDATE leave_balances SET employee_id = 'EMP-002' WHERE employee_id = 'EMP-001'",
+        "UPDATE leave_balances SET leave_type = 'sick' WHERE employee_id = 'EMP-001' AND leave_type = 'annual'",
+        "UPDATE leave_balances SET as_of_date = '2030-01-01'",
+        "UPDATE leave_balances SET updated_at = now()",
+        "INSERT INTO leave_balances VALUES ('EMP-001', 'annual', 99, now()::date)",
+        "DELETE FROM leave_balances",
+    ],
+)
+def test_api_cannot_raise_move_or_create_a_balance(api, statement: str) -> None:
+    before = annual(api)
+    assert denied(api, statement)
+    assert annual(api) == before
+
+
+def test_balance_can_never_go_negative(api) -> None:
+    lower_everything = "UPDATE leave_balances SET available_days = available_days - 1000 WHERE employee_id = 'EMP-001'"
+    assert violated_constraint(api, lambda: api.execute(lower_everything)) == "leave_balances_available_days_check"
+
+
+def test_hr_cancelling_an_assistant_request_refunds_the_days(owner) -> None:
+    setup_proposal(owner)
+    insert_request(owner)  # 2 business days, made through the assistant
+    before = annual(owner)
+    owner.execute("UPDATE leave_requests SET status = 'cancelled', status_set_by = 'hr_system' WHERE request_id = 'LR-GUARD-1'")
+    assert annual(owner) == before + 2
+
+
+def test_hr_approving_keeps_the_balance(owner) -> None:
+    setup_proposal(owner)
+    insert_request(owner)
+    before = annual(owner)
+    owner.execute("UPDATE leave_requests SET status = 'approved', status_set_by = 'hr_system' WHERE request_id = 'LR-GUARD-1'")
+    assert annual(owner) == before  # already deducted at confirmation
+
+
+def test_cancelling_seeded_history_is_not_refunded(owner) -> None:
+    insert_request(owner, "LR-GUARD-H", status="approved", by="seed", proposal_id=None, key=None, policy=None)
+    before = annual(owner)
+    owner.execute("UPDATE leave_requests SET status = 'cancelled', status_set_by = 'hr_system' WHERE request_id = 'LR-GUARD-H'")
+    assert annual(owner) == before  # this system never deducted it

@@ -11,13 +11,7 @@ from pydantic import BaseModel, ValidationError
 from .config import Settings
 from .contracts import ActionProposal, AuthContext, PrepareLeaveArgs, SearchPolicyArgs, TicketArgs
 from .conversation import ConversationStore
-from .domain import (
-    DomainError,
-    effective_balances,
-    ticket_summary_problem,
-    today_wib,
-    validate_leave_request,
-)
+from .domain import DomainError, ticket_summary_problem, today_wib, validate_leave_request
 from .repository import Repository
 from .retrieval import RetrievalService
 from .security import redact
@@ -178,9 +172,10 @@ class ToolExecutor:
         }, None
 
     def _get_my_leave_balance(self, auth: AuthContext) -> ToolResult:
+        """K26: confirmed requests are already deducted from the stored balance, so what can be
+        requested IS the stored balance. Pending days are shown only as information."""
         balances = self.repository.get_balances(auth.employee_id)
         pending = self.repository.get_pending_days(auth.employee_id)
-        effective = {b.leave_type: b.available_days for b in effective_balances(balances, pending)}
         return {
             "status": "ok",
             "balances": [
@@ -188,18 +183,17 @@ class ToolExecutor:
                     "leave_type": b.leave_type,
                     "balance_days": b.available_days,
                     "pending_manager_review_days": pending.get(b.leave_type, 0),
-                    "available_to_request_days": effective[b.leave_type],
+                    "available_to_request_days": b.available_days,
                     "as_of_date": b.as_of_date.isoformat(),
                 }
                 for b in balances
             ],
+            "note": "Hari yang menunggu manajer sudah dipotong dari saldo dan dikembalikan jika HR membatalkannya.",
         }, None
 
     def _prepare_leave_request(self, args: PrepareLeaveArgs, auth: AuthContext) -> ToolResult:
         employee_id = auth.employee_id
-        balances = effective_balances(
-            self.repository.get_balances(employee_id), self.repository.get_pending_days(employee_id)
-        )
+        balances = self.repository.get_balances(employee_id)  # K26: already net of confirmed requests
         overlaps = self.repository.has_overlap(employee_id, args.start_date, args.end_date)
         try:
             days, summary = validate_leave_request(args, balances, overlaps, self.today_factory())

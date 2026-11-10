@@ -28,12 +28,17 @@ def tools(repository: MemoryRepository) -> ToolExecutor:
 
 
 def add_pending(repository: MemoryRepository, employee_id: str, days: int) -> None:
+    """A confirmed request waiting for the manager. K26: confirming already took the days."""
     repository.requests.append((employee_id, LeaveRequestView(
         request_id=f"LR-PENDING-{employee_id}", leave_type="annual",
         start_date=date(2026, 11, 2), end_date=date(2026, 11, 2) + timedelta(days=days - 1),
         business_days=days, status="pending_manager_review",
         created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
     )))
+    repository.balances[employee_id] = [
+        b.model_copy(update={"available_days": b.available_days - days}) if b.leave_type == "annual" else b
+        for b in repository.balances[employee_id]
+    ]
 
 
 # --- Schemas ---
@@ -70,9 +75,9 @@ def test_balance_shows_own_data_with_pending_breakdown(tools: ToolExecutor, repo
     add_pending(repository, "EMP-002", 1)  # Bima's request must not touch Alya's numbers
     result, _ = tools.execute("get_my_leave_balance", {}, ALYA)
     annual = next(b for b in result["balances"] if b["leave_type"] == "annual")
-    assert annual == {
+    assert annual == {  # K26: 8 at the start, 5 already deducted at confirmation
         "leave_type": "annual",
-        "balance_days": 8,
+        "balance_days": 3,
         "pending_manager_review_days": 5,
         "available_to_request_days": 3,
         "as_of_date": annual["as_of_date"],
@@ -97,8 +102,8 @@ def test_valid_request_creates_only_a_proposal(tools: ToolExecutor, repository: 
     assert timedelta(minutes=14) < ttl <= timedelta(minutes=15)
 
 
-def test_effective_balance_is_applied(tools: ToolExecutor, repository: MemoryRepository) -> None:
-    add_pending(repository, "EMP-001", 5)  # balance 8 - 5 pending = 3
+def test_confirmed_days_are_not_available_again(tools: ToolExecutor, repository: MemoryRepository) -> None:
+    add_pending(repository, "EMP-001", 5)  # K26: stored balance is now 8 - 5 = 3
     result, proposal = tools.execute(
         "prepare_leave_request",
         {"start_date": "2026-10-05", "end_date": "2026-10-09", "leave_type": "annual", "reason": None},

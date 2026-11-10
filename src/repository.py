@@ -221,11 +221,13 @@ class MemoryRepository:
                 raise ConflictError(EXPIRED_MESSAGE)
             if self.has_overlap(employee_id, proposal.start_date, proposal.end_date):
                 raise ConflictError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
-            balance = next((b.available_days for b in self.balances.get(employee_id, [])
-                            if b.leave_type == proposal.leave_type), 0)
-            available = balance - self.get_pending_days(employee_id).get(proposal.leave_type, 0)
-            if proposal.business_days > available:
-                raise ConflictError(insufficient_balance_message(proposal.leave_type, proposal.business_days, max(0, available)))
+            # K26: deduct the stored balance, as the conditional UPDATE does in PostgreSQL.
+            balances = self.balances.get(employee_id, [])
+            index = next((i for i, b in enumerate(balances) if b.leave_type == proposal.leave_type), None)
+            available = balances[index].available_days if index is not None else 0
+            if index is None or proposal.business_days > available:
+                raise ConflictError(insufficient_balance_message(proposal.leave_type, proposal.business_days, available))
+            balances[index] = balances[index].model_copy(update={"available_days": available - proposal.business_days})
 
             request_id = new_request_id()
             self.requests.append((employee_id, LeaveRequestView(
@@ -457,8 +459,10 @@ class PostgresRepository:
           4. key already used for another proposal -> conflict
           5. expired -> conflict. Checked AFTER idempotency, so a retry of a confirm that
              succeeded still gets its answer even if the proposal expired since.
-          6. overlap and effective balance checked again: other requests may exist by now
-          7. insert pending_manager_review (status_set_by='assistant'), mark proposal confirmed
+          6. overlap checked again: other requests may exist by now
+          7. K26: deduct the balance with ONE conditional UPDATE (no read-then-write race);
+             0 rows means not enough days -> conflict, and the whole transaction rolls back
+          8. insert pending_manager_review (status_set_by='assistant'), mark proposal confirmed
         """
         with self.pool.connection() as conn, conn.transaction():
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (employee_id,))
@@ -494,15 +498,22 @@ class PostgresRepository:
 
             if self._overlaps(conn, employee_id, proposal["start_date"], proposal["end_date"]):
                 raise ConflictError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
-            balance_row = conn.execute(
-                "SELECT available_days FROM leave_balances WHERE employee_id = %s AND leave_type = %s",
-                (employee_id, proposal["leave_type"]),
+            deducted = conn.execute(
+                """
+                UPDATE leave_balances SET available_days = available_days - %(days)s
+                WHERE employee_id = %(employee_id)s AND leave_type = %(leave_type)s
+                  AND available_days >= %(days)s
+                RETURNING available_days
+                """,
+                {"days": proposal["business_days"], "employee_id": employee_id, "leave_type": proposal["leave_type"]},
             ).fetchone()
-            balance = balance_row["available_days"] if balance_row else 0
-            available = balance - self._pending_days(conn, employee_id).get(proposal["leave_type"], 0)
-            if proposal["business_days"] > available:
+            if deducted is None:
+                current = conn.execute(
+                    "SELECT available_days FROM leave_balances WHERE employee_id = %s AND leave_type = %s",
+                    (employee_id, proposal["leave_type"]),
+                ).fetchone()
                 raise ConflictError(insufficient_balance_message(
-                    proposal["leave_type"], proposal["business_days"], max(0, available)))
+                    proposal["leave_type"], proposal["business_days"], current["available_days"] if current else 0))
 
             request_id = new_request_id()
             conn.execute(

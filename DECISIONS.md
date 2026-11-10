@@ -728,7 +728,7 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 2. UPDATE atomik bersyarat: `SET available_days = available_days - n WHERE … AND available_days >= n`. 0 baris → 409 dan seluruh transaksi batal.
 3. Satu transaksi dengan INSERT `leave_requests`, di bawah advisory lock dan row lock K22.
 4. Grant per kolom: `hr_api` hanya `UPDATE (available_days)` di `leave_balances`.
-5. Trigger `leave_balances_guard`: jika pelakunya `hr_api`, saldo hanya boleh turun. Bug di kode pun ditolak database.
+5. Trigger `leave_balances_guard`: selain pemilik tabel (sistem HR/seed), login apa pun, termasuk `hr_api`, hanya boleh menurunkan saldo. Bug di kode pun ditolak database. Aturan ini sengaja tidak menyebut nama role, jadi login baru di masa depan otomatis ikut terbatas.
 6. Replay idempotent keluar sebelum UPDATE, jadi tidak memotong dua kali.
 7. `CHECK (available_days >= 0)` sebagai lapis terakhir.
 

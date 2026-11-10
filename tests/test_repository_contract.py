@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 
 from src.config import get_settings
 from src.contracts import ActionProposal, LeaveBalance, LeaveRequestView, PrepareLeaveArgs
-from src.domain import DomainError, effective_balances, validate_leave_request
+from src.domain import DomainError, validate_leave_request
 from src.repository import ConflictError, MemoryRepository, PostgresRepository
 
 TODAY = date(2026, 9, 23)  # Wednesday, same frozen day as the rest of the suite
@@ -133,7 +133,7 @@ def test_balances_belong_to_one_employee(repo) -> None:
     assert repo.get_balances("ADM-001") == []
 
 
-# --- K8: effective balance ---
+# --- Pending days (information only) and K26 deduction ---
 
 def test_pending_days_count_only_pending_requests_of_that_employee(repo) -> None:
     add_request(repo, A, "TEST-P1", "annual", date(2026, 10, 5), date(2026, 10, 9), 5, "pending_manager_review")
@@ -147,20 +147,23 @@ def test_pending_days_count_only_pending_requests_of_that_employee(repo) -> None
     assert repo.get_pending_days(B) == {"annual": 1}
 
 
-def test_effective_balance_blocks_second_request(repo) -> None:
-    """Annual balance 8 with 5 days pending: a new 5-day request fails, a 3-day one passes."""
-    add_request(repo, A, "TEST-P1", "annual", date(2026, 10, 5), date(2026, 10, 9), 5, "pending_manager_review")
-    balances = effective_balances(repo.get_balances(A), repo.get_pending_days(A))
+def annual_balance(repo, employee_id: str = A) -> int:
+    return {b.leave_type: b.available_days for b in repo.get_balances(employee_id)}["annual"]
+
+
+def test_confirmed_days_are_deducted_so_the_next_validation_sees_them(repo) -> None:
+    """K26: balance 8, a 5-day request confirmed -> stored balance 3; a new 5-day request fails."""
+    repo.save_proposal(A, make_proposal("AP-TEST-P1", start=date(2026, 10, 5), end=date(2026, 10, 9), days=5))
+    repo.confirm_proposal(A, "AP-TEST-P1", "key-test-0100")
+    assert annual_balance(repo) == 3
+    assert annual_balance(repo, B) == 3  # Bima's own balance, untouched (it was 3 already)
 
     five_days = PrepareLeaveArgs(start_date=date(2026, 10, 19), end_date=date(2026, 10, 23), leave_type="annual")
     with pytest.raises(DomainError, match="tidak cukup.*tersedia 3 hari"):
-        validate_leave_request(five_days, balances, False, TODAY)
+        validate_leave_request(five_days, repo.get_balances(A), False, TODAY)
 
     three_days = PrepareLeaveArgs(start_date=date(2026, 10, 19), end_date=date(2026, 10, 21), leave_type="annual")
-    assert validate_leave_request(three_days, balances, False, TODAY)[0] == 3
-
-    # The stored balance itself never changes.
-    assert {b.leave_type: b.available_days for b in repo.get_balances(A)}["annual"] == 8
+    assert validate_leave_request(three_days, repo.get_balances(A), False, TODAY)[0] == 3
 
 
 # --- Overlap ---
@@ -222,6 +225,7 @@ def test_confirm_creates_one_pending_request_and_replays(repo) -> None:
     assert again.audit_reference == first.audit_reference
     mine = [r for r in repo.list_leave_requests(A) if r.request_id == first.request_id]
     assert len(mine) == 1 and mine[0].status == "pending_manager_review"
+    assert annual_balance(repo) == 8 - 2  # K26: deducted once; the replay does not deduct again
 
 
 def test_confirm_rejects_other_owner_other_key_and_reused_key(repo) -> None:
@@ -236,6 +240,8 @@ def test_confirm_rejects_other_owner_other_key_and_reused_key(repo) -> None:
         repo.confirm_proposal(A, "AP-TEST-C2", "key-test-0003")
     with pytest.raises(ConflictError, match="proposal lain"):
         repo.confirm_proposal(A, "AP-TEST-C3", "key-test-0002")
+    assert annual_balance(repo) == 8 - 2  # only the one successful confirmation deducted
+    assert annual_balance(repo, B) == 3
 
 
 def test_expired_proposal_creates_nothing_but_a_retry_after_success_still_replays(repo) -> None:
@@ -244,6 +250,7 @@ def test_expired_proposal_creates_nothing_but_a_retry_after_success_still_replay
     with pytest.raises(ConflictError, match="expired"):
         repo.confirm_proposal(A, "AP-TEST-E1", "key-test-0004")
     assert repo.get_pending_days(A) == {}
+    assert annual_balance(repo) == 8  # nothing deducted
 
     repo.save_proposal(A, make_proposal("AP-TEST-E2"))
     done = repo.confirm_proposal(A, "AP-TEST-E2", "key-test-0005")
@@ -251,14 +258,15 @@ def test_expired_proposal_creates_nothing_but_a_retry_after_success_still_replay
     assert repo.confirm_proposal(A, "AP-TEST-E2", "key-test-0005").request_id == done.request_id
 
 
-def test_effective_balance_is_checked_again_at_confirmation(repo) -> None:
-    """K8: two 5-day proposals made while nothing was pending; balance 8 allows only one."""
+def test_balance_is_checked_again_at_confirmation(repo) -> None:
+    """Two 5-day proposals made while the balance was 8: the deduction allows only one (K26)."""
     repo.save_proposal(A, make_proposal("AP-TEST-K1", start=date(2026, 10, 5), end=date(2026, 10, 9), days=5))
     repo.save_proposal(A, make_proposal("AP-TEST-K2", start=date(2026, 10, 19), end=date(2026, 10, 23), days=5))
     repo.confirm_proposal(A, "AP-TEST-K1", "key-test-0006")
     with pytest.raises(ConflictError, match="tidak cukup.*tersedia 3 hari"):
         repo.confirm_proposal(A, "AP-TEST-K2", "key-test-0007")
     assert repo.get_pending_days(A) == {"annual": 5}
+    assert annual_balance(repo) == 3  # the failed confirmation rolled back completely
 
 
 def test_overlap_is_checked_again_at_confirmation(repo) -> None:
@@ -299,6 +307,7 @@ def test_parallel_confirms_of_two_proposals_cannot_overspend(repo) -> None:
     assert sum(not isinstance(r, Exception) for r in results) == 1
     assert sum(isinstance(r, ConflictError) for r in results) == 1
     assert repo.get_pending_days(A) == {"annual": 5}
+    assert annual_balance(repo) == 3  # never negative, never deducted twice
 
 
 def test_parallel_double_click_creates_one_request(repo) -> None:
@@ -306,3 +315,4 @@ def test_parallel_double_click_creates_one_request(repo) -> None:
     results = _race([lambda: repo.confirm_proposal(A, "AP-TEST-D1", "key-test-0012")] * 3)
     assert len({r.request_id for r in results}) == 1
     assert sorted(r.idempotent_replay for r in results) == [False, True, True]
+    assert annual_balance(repo) == 8 - 2  # one request, one deduction

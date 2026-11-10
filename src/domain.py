@@ -32,19 +32,6 @@ RULE_POLICY_VERSIONS = {
 ACTIVE_STATUSES = frozenset({"pending_manager_review", "approved"})
 
 
-def effective_balances(balances: list[LeaveBalance], pending_days: dict[str, int]) -> list[LeaveBalance]:
-    """K8: database balance minus days still waiting for the manager, per leave type.
-
-    The database balance is never changed; this is only a calculation for validation.
-    """
-    return [
-        balance.model_copy(
-            update={"available_days": max(0, balance.available_days - pending_days.get(balance.leave_type, 0))}
-        )
-        for balance in balances
-    ]
-
-
 # K3: "paling lambat tiga hari kerja sebelum tanggal mulai" (data/policies/annual-leave.md).
 # The submission day counts: submitted Wednesday -> earliest start is next Monday.
 MIN_NOTICE_BUSINESS_DAYS = 3
@@ -94,8 +81,8 @@ def validate_leave_request(
 ) -> tuple[int, list[str]]:
     """Check every rule in a fixed order and return (business days, summary).
 
-    `balances` must already be the EFFECTIVE balances (database balance minus pending
-    days, K8); the caller computes them, so this module stays pure.
+    `balances` are the stored balances. Since K26 they are already net of every confirmed
+    request, so no pending days are subtracted here.
 
     Order matters, and the tests lock it:
     1. date order and 2. past date come before the 3-day rule (tests/test_domain.py:20);
@@ -123,7 +110,7 @@ def validate_leave_request(
     # 5. Overlap with an active request
     if overlaps:
         raise DomainError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
-    # 6. Effective balance
+    # 6. Balance (K26: already net of confirmed requests)
     balance = next((b for b in balances if b.leave_type == args.leave_type), None)
     if balance is None:
         raise DomainError(f"Saldo cuti {args.leave_type} tidak ditemukan.")
