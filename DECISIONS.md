@@ -32,6 +32,9 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K24 | Evaluator live dan aturan penilaian | **Diputuskan** | 2026-11-09 |
 | K25 | Konfirmasi tiket lewat percakapan dan memori singkat | **Diputuskan** | 2026-11-10 |
 | K26 | Saldo dipotong saat pengguna mengonfirmasi | **Diputuskan** | 2026-11-10 |
+| K27 | Proposal cuti ditampilkan sebagai ringkasan, bukan JSON | **Diputuskan** | 2026-11-10 |
+| K28 | Permintaan cuti bertanggal wajib lewat tool | **Diputuskan** | 2026-11-10 |
+| K29 | Dockerfile dan uji dari checkout bersih | **Diputuskan** | 2026-11-10 |
 
 Status yang dipakai:
 
@@ -740,7 +743,57 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 - Langkah 6 K22 kini: overlap dicek, lalu saldo dipotong secara atomik. Langkah 7 tetap.
 - `get_my_leave_balance` tetap mengembalikan field yang sama. `available_to_request_days` sekarang sama dengan saldo di database, dan `pending_manager_review_days` hanya informasi.
 
-**Risiko:** Request pending yang dibuat sebelum perubahan ini tidak pernah memotong saldo. Jalankan `setup_lab --reset` sebelum demo dan penilaian. Riwayat dari seed (tanpa `proposal_id`) tidak di-refund jika dibatalkan, karena sistem ini tidak pernah memotongnya.
+**Risiko (K26):** Request pending yang dibuat sebelum perubahan ini tidak pernah memotong saldo. Jalankan `setup_lab --reset` sebelum demo dan penilaian. Riwayat dari seed (tanpa `proposal_id`) tidak di-refund jika dibatalkan, karena sistem ini tidak pernah memotongnya.
+
+## K27 — Proposal cuti ditampilkan sebagai ringkasan, bukan JSON
+
+**Status:** Diputuskan (10 Nov 2026)
+
+**Temuan:** UI dari mentor menampilkan proposal cuti dengan `st.json(proposal)` ([app.py](app.py)). Pegawai melihat `proposal_id`, `action_type`, `requires_confirmation`, dan `expires_at` dalam UTC. Itu tampilan untuk developer, padahal yang membaca adalah pegawai yang akan menekan Konfirmasi. Ditemukan juga dua teks backend yang ikut terlihat pengguna: kode jenis cuti dalam bahasa Inggris ("Saldo cuti annual cukup") dan pesan saldo kurang saat konfirmasi yang masih memakai logika K8 ("setelah dikurangi permintaan yang masih menunggu manajer").
+
+**Keputusan:**
+
+- Proposal ditampilkan sebagai tabel ringkas: jenis cuti, tanggal lengkap (misalnya "Senin, 23 November 2026"), jumlah hari kerja, alasan, dan batas waktu dalam WIB, diikuti daftar validasi yang lolos. JSON mentah tetap ada di bagian "Detail teknis" yang tertutup, untuk debugging dan presentasi.
+- Pesan sukses konfirmasi memakai status yang bisa dibaca, diikuti status asli dari API: "menunggu tinjauan manajer (status: `pending_manager_review`)". Status asli tetap tampil karena [docker-delivery.md](docker-delivery.md) meminta grader memastikan konfirmasi menghasilkan `pending_manager_review`.
+- Fungsi format ada di `ui_format.py` (fungsi murni, dites di `tests/test_ui_format.py`), mengikuti pola `ui_contract.py`.
+- Teks backend memakai nama jenis cuti dalam bahasa Indonesia, dan pesan saldo kurang disesuaikan dengan K26.
+
+**Kenapa ini tidak melanggar [lab.md:33](lab.md:33):** yang dilarang adalah mengubah **kontrak** `app.py`. Endpoint, body request, dan alur konfirmasi (tombol + idempotency key) tidak berubah. `tests/test_supplied_ui.py` tetap lulus tanpa diubah.
+
+**Risiko:** `ui_format.py` adalah file baru di root. Dockerfile (Step 11) harus ikut menyalinnya, kalau tidak service Streamlit gagal saat import. Sudah disalin (K29).
+
+## K28 — Permintaan cuti bertanggal wajib lewat tool
+
+**Status:** Diputuskan (10 Nov 2026)
+
+**Temuan:** Evaluator yang dijalankan di Docker (K29) memberi **NO-GO**: hard gate `leave-past-009` ("Ajukan cuti tahunan 2025-01-02") gagal, karena model tidak memanggil tool dan langsung bertanya balik, sehingga outcome tercatat `answered`. Diulang 10 kali dengan input yang sama: **5 kali gagal** (3 kali model mencari kebijakan, 2 kali langsung menjawab). Dua run evaluasi sebelumnya lulus karena kebetulan. Peluang grader mendapat NO-GO sekitar 50%.
+
+**Keputusan (dua lapis):**
+
+1. **Instruksi model (akar masalah):** setiap permintaan cuti yang menyebut tanggal wajib lewat `prepare_leave_request`, walaupun tanggalnya tampak lewat, terbalik, atau saldonya mungkin kurang, karena aturan itu tugas tool. Satu tanggal berarti cuti satu hari.
+2. **Kode (jaminan):** K24 menyatakan outcome `abstained` setiap kali aksi cuti tidak terlaksana, tetapi baru diterapkan untuk tool yang menolak. Kini juga berlaku jika pesan meminta cuti bertanggal (`is_leave_action_request`: kata "cuti", kata kerja aksi, dan tanggal ISO) dan tidak ada proposal yang dibuat, dengan `stop_reason = action_not_performed`. Teks model tetap ditampilkan; hanya label outcome yang dibuat jujur.
+
+**Alasan:** sama dengan K8 dan K25: pengaman tidak boleh bergantung pada keputusan model. Detektor sengaja sempit: pertanyaan kebijakan yang menyebut tanggal ("apakah 2026-12-24 libur?") tetap `answered`. Lapis kedua tidak bisa menutupi kegagalan kasus cuti yang valid, karena kasus itu mengharapkan `action_proposed` dengan proposal.
+
+**Bukti (10 Nov 2026, di Docker):** input yang sama diulang 20 kali → **20/20** memanggil tool dan berakhir `abstained`. Evaluator dengan perintah `docker-delivery.md` dijalankan 3 kali → **GO** ketiganya (satu dengan cek lintas pegawai). Test: `test_leave_request_the_model_did_not_carry_out_is_abstained`, `test_a_question_that_mentions_a_date_is_still_answered`, dan `test_leave_action_requests`.
+
+## K29 — Dockerfile dan uji dari checkout bersih
+
+**Status:** Diputuskan (10 Nov 2026)
+
+**Keputusan:**
+
+- Satu image untuk `api` dan `streamlit`. `CMD` menjalankan uvicorn, tanpa `ENTRYPOINT`, sehingga Compose dan `docker compose run` bisa menggantinya untuk Streamlit, seed, dan test.
+- User non-root `appuser` (uid 10001). Kode dimiliki root, jadi aplikasi yang berjalan tidak bisa mengubahnya. User hanya bisa menulis ke home-nya (Streamlit) dan `/app/outputs` (report evaluator, diekspor dengan `docker compose cp`).
+- Yang disalin hanya yang dibaca saat runtime: `src/`, `data/`, `evaluation/` (regression case), `tests/`, `app.py`, `ui_contract.py`, `ui_format.py` (K27), `demo_personas.json`, dan `pyproject.toml` (setelan pytest dan marker `live`).
+- `PYTEST_ADDOPTS="-p no:cacheprovider"`, karena kode read-only. Streamlit headless dan tanpa usage statistics.
+- `.dockerignore` memakai `**/__pycache__/` dan `**/*.py[cod]`. Pola tanpa `**/` hanya berlaku di root, sehingga cache di `src/` dan `tests/` ikut masuk image.
+
+**Temuan saat uji dari checkout bersih:** seed gagal dengan `APIConnectionError`. Penyebabnya, Compose selalu mengirim `OPENAI_BASE_URL`, berupa string kosong jika `.env` tidak mengisinya (bawaan `.env.example`). Kode sudah mengubah `""` menjadi `None`, tetapi SDK OpenAI lalu membaca sendiri environment variable itu dan memakai `""` sebagai alamat server ("URL is missing http://"). Di laptop bug ini tidak muncul karena `.env` dibaca pydantic dan tidak masuk environment. Tanpa perbaikan ini, **setiap grader** gagal seed, `/readyz` tidak pernah `ready`, dan chat tidak bisa memanggil model. Perbaikan: `OpenAIProvider` selalu memberi `base_url` eksplisit (default `https://api.openai.com/v1`). Test: `tests/test_providers.py` gagal tanpa perbaikan dan lulus dengannya.
+
+**Bukti (10 Nov 2026):** salinan berisi hanya file yang terlihat git (tanpa `.env`, `.venv`, cache), `.env` dibuat dari `.env.example`, project name `p2m2_cleancheck`, port host diganti karena stack lain sedang berjalan. Urutan `docker-delivery.md`: build tanpa API key (variabel key tidak ada di image) → `postgres`/`redis` healthy → seed (15 chunk ter-embed) → `api`/`streamlit` up → `pytest -m "not live"` di container **255 passed**. `whoami` = `appuser` di kedua container. `/healthz` ok, `/readyz` `ready` (4 cek ok), `/openapi.json` memuat semua path, Streamlit HTTP 200. Di Streamlit: jatah cuti dijawab dengan `[HR-LEAVE-001]` dan trace, saldo Alya 8, konfirmasi menghasilkan `pending_manager_review`. Live test di container lulus, report diekspor dengan `docker compose cp`. Stack uji lalu dihapus beserta volume dan image-nya.
+
+**Risiko:** Ini salinan working tree, belum clone dari commit. Setelah di-commit, uji sekali lagi dari `git clone` baru sebelum pengumpulan (task "Uji akhir dari checkout bersih").
 
 ## Temuan kecil
 

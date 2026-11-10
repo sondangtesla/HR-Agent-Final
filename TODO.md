@@ -7,8 +7,8 @@ Urutan kerja mengikuti Step 1–11 di [lab.md](lab.md) (keputusan K7).
 - **Mulai:** Kamis, 5 November 2026
 - **Target internal:** chat dan saldo berjalan lewat Streamlit pada 13 November; seluruh sistem selesai pada 15 November 2026.
 - **Deadline pengumpulan:** 20 November 2026.
-- **Status saat ini:** Step 1–10 selesai, termasuk Checkpoint 2, 3, dan 4 (peta failure di Step 1 ditunda). Evaluasi live **GO** (16/16). Pytest 157 passed, 0 failed.
-- **Task berikutnya:** `Dockerfile` dan alur `docker-delivery.md` dari checkout bersih (Step 11).
+- **Status saat ini (10 Nov):** Step 1–10 selesai, plus K25–K28. Step 11: Dockerfile dan alur `docker-delivery.md` lulus dari salinan bersih (K29). Evaluator di Docker **GO** 3 kali berturut-turut (16/16). Pytest 255 passed di host dan di container.
+- **Task berikutnya:** commit, lalu risk register, README, diagram final, demo script, dan screenshot. Terakhir, uji ulang dari `git clone` baru.
 
 ## Target rilis
 
@@ -29,12 +29,12 @@ Isi kolom keputusan sebelum mengerjakan task terkait. Alasan lengkap dan opsi ya
 | ID | Masalah | Rekomendasi sementara | Keputusan |
 |---|---|---|---|
 | K1 | `leave-valid-008` (hard gate) memakai 2–3 Nov 2026, yang sudah lewat. Test membekukan tanggal di 23 Sep 2026, sedangkan server live memakai tanggal sebenarnya. | `data/` tidak diubah. Evaluator mengganti tanggal saat berjalan ke hari kerja mendatang yang lolos aturan K3, lalu mencatatnya di report. | **Tanggal diganti** (6 Nov 2026). Belum dikonfirmasi instruktur. |
-| K2 | `create_hr_ticket` menulis ke database tanpa konfirmasi, padahal rubric melarang side effect tanpa konfirmasi eksplisit. Endpoint confirm hanya mendukung `leave_request`. | Tanya instruktur. Jika tidak ada jawaban: tiket hanya dibuat bila diminta jelas oleh pengguna, ringkasannya disamarkan, dan alasannya dicatat di risk register. | |
+| K2 | `create_hr_ticket` menulis ke database tanpa konfirmasi, padahal rubric melarang side effect tanpa konfirmasi eksplisit. Endpoint confirm hanya mendukung `leave_request`. | Tanya instruktur. Jika tidak ada jawaban: tiket hanya dibuat bila diminta jelas oleh pengguna, ringkasannya disamarkan, dan alasannya dicatat di risk register. | **Diputuskan** (mentor, 9 Nov): konfirmasi lewat percakapan. Diterapkan 10 Nov sebagai K25. |
 | K3 | Kebijakan `HR-LEAVE-001` mewajibkan pengajuan minimal 3 hari kerja sebelumnya, tetapi aturan ini tidak ada di daftar validasi lab/brief. | Terapkan agar jawaban dan perilaku sistem konsisten. Risiko: bisa bertabrakan dengan hidden test. | **Diterapkan** (5 Nov 2026), khusus cuti tahunan. Beri tahu instruktur. |
 | K4 | Waktu pengerjaan terbatas. | Ikuti tabel Jadwal. | **Diputuskan** (6 Nov 2026): Senin 3 jam, Selasa–Jumat sekitar 2 jam per hari. |
 | K5 | `.env` sudah ada, tetapi `AGENT_MODEL` dan `EMBEDDING_MODEL` masih kosong. | Lengkapi di Step 3, sebelum indexing. | **Selesai** (6 Nov 2026): kredensial tersedia. |
 | K7 | Urutan kerja: `lab.md` atau inti logika lebih dulu. | Inti logika lebih dulu, kecuali mentor mengecek checkpoint sesuai urutan lab. | **Ikuti `lab.md`** (6 Nov 2026). |
-| K8 | Request pending tidak mengurangi saldo, jadi total request pending bisa melebihi saldo. | Hitung saldo efektif di dalam validasi, lalu cek ulang saat konfirmasi. | **Diputuskan** (9 Nov 2026): saldo efektif di validasi, cek ulang saat konfirmasi, dan rincian saldo di `get_my_leave_balance`. |
+| K8 | Request pending tidak mengurangi saldo, jadi total request pending bisa melebihi saldo. | Hitung saldo efektif di dalam validasi, lalu cek ulang saat konfirmasi. | **Digantikan K26** (10 Nov): saldo kini benar-benar dipotong saat konfirmasi. |
 
 ## Jadwal
 
@@ -207,8 +207,8 @@ Pertanyaan pemandu:
 
 ## Step 11 — Deployment dan demo
 
-- [ ] **`Dockerfile`.** Done when: image non-root terbangun tanpa API key, dan `whoami` di container bukan `root`.
-- [ ] **Urutan `docker-delivery.md` dari checkout bersih.** Done when: seed, API, UI, dan `pytest -m "not live"` di container lulus; `/readyz` mengembalikan `ready`.
+- [x] **`Dockerfile`.** Done when: image non-root terbangun tanpa API key, dan `whoami` di container bukan `root`. Selain daftar di template, salin juga `ui_format.py` (K27), karena `app.py` mengimpornya. Terbukti 10 Nov: `whoami` = `appuser` di `api` dan `streamlit`, variabel API key tidak ada di image, kode read-only, `/app/outputs` bisa ditulis (K29).
+- [x] **Urutan `docker-delivery.md` dari checkout bersih.** Done when: seed, API, UI, dan `pytest -m "not live"` di container lulus; `/readyz` mengembalikan `ready`. Terbukti 10 Nov dari salinan working tree tanpa `.env`/`.venv`: seed 15 chunk, `/readyz` `ready`, 255 passed di container, cek UI lulus, live test lulus, evaluator GO 3x. Uji ini menemukan dua bug: `OPENAI_BASE_URL` kosong dari Compose (K29) dan hard gate `leave-past-009` yang gagal 5/10 (K28). Sisa: ulangi dari `git clone` setelah commit.
 - [ ] **Risk register dan demo script.** Done when: semua risiko punya owner, mitigation, dan evidence nyata.
 - [ ] **Checkpoint 5.** Done when: demo Docker mencakup happy path, blocked cross-user request, pending confirmation, failure/abstention, monitoring evidence, dan residual risk.
 
