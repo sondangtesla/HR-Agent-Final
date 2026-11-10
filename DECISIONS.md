@@ -7,13 +7,13 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | ID | Topik | Status | Tanggal |
 |---|---|---|---|
 | K1 | Tanggal `leave-valid-008` sudah lewat | **Diputuskan** | 2026-11-06 |
-| K2 | `create_hr_ticket` berjalan tanpa konfirmasi | Menunggu instruktur | 2026-11-05 |
+| K2 | `create_hr_ticket` berjalan tanpa konfirmasi | **Diputuskan** (mentor) | 2026-11-09 |
 | K3 | Aturan pengajuan minimal 3 hari kerja | **Diputuskan** | 2026-11-05 |
 | K4 | Target dan jadwal pengerjaan | **Diputuskan** | 2026-11-06 |
 | K5 | Kredensial model | Selesai | 2026-11-06 |
 | K6 | Setup Docker ditunda ke Tahap 4 | Digantikan K7 | 2026-11-06 |
 | K7 | Urutan kerja mengikuti `lab.md` | **Diputuskan** | 2026-11-06 |
-| K8 | Saldo efektif saat validasi cuti | **Diputuskan** | 2026-11-09 |
+| K8 | Saldo efektif saat validasi cuti | Digantikan K26 | 2026-11-10 |
 | K9 | Penjaga status dan keunikan di schema `leave_requests` | **Diputuskan** | 2026-11-09 |
 | K10 | Cara menyimpan token: SHA-256 tanpa salt | **Diputuskan** | 2026-11-09 |
 | K11 | `proposal_id` dibuat oleh backend | **Diputuskan** | 2026-11-09 |
@@ -30,6 +30,8 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K22 | Transaksi konfirmasi | **Diputuskan** | 2026-11-09 |
 | K23 | Telemetry dan minimisasi data ke provider | **Diputuskan** | 2026-11-09 |
 | K24 | Evaluator live dan aturan penilaian | **Diputuskan** | 2026-11-09 |
+| K25 | Konfirmasi tiket lewat percakapan dan memori singkat | **Diputuskan** | 2026-11-10 |
+| K26 | Saldo dipotong saat pengguna mengonfirmasi | **Diputuskan** | 2026-11-10 |
 
 Status yang dipakai:
 
@@ -69,7 +71,7 @@ Status yang dipakai:
 
 ## K2 — `create_hr_ticket` berjalan tanpa konfirmasi
 
-**Status:** Menunggu instruktur
+**Status:** Diputuskan (jawaban mentor 9 Nov, lihat di bawah)
 
 **Temuan:** Membuat tiket menambah baris baru di database, dan model bisa memanggil tool ini langsung. Rubric melarang side effect tanpa konfirmasi eksplisit, tetapi endpoint konfirmasi hanya mendukung `leave_request`.
 
@@ -96,6 +98,12 @@ Status yang dipakai:
 **Catatan:** Konfirmasi berarti pengguna sendiri menekan tombol. Ini berbeda dari validasi Python, yang hanya memeriksa kebenaran isi data dan tidak bisa mengetahui apakah pengguna memang menginginkan tindakan itu.
 
 **Yang ditanyakan ke instruktur:** Apakah membuat tiket termasuk side effect yang wajib dikonfirmasi?
+
+**Jawaban mentor (9 Nov 2026, lewat Zoom):** Tidak perlu tombol. Agent menampilkan data tiket dan meminta pengguna mengonfirmasinya **lewat percakapan** sebelum tiket dibuat. Jika datanya belum lengkap, agent meminta pengguna mengisinya, seperti field wajib di formulir.
+
+**Temuan yang membuat jawaban ini belum bisa langsung diterapkan:** UI dari mentor ([app.py:41](app.py:41)) hanya mengirim satu pesan tanpa riwayat, dan agent hanya mengirim pesan itu ke model. Saat model bertanya balik (“Tiket ini tentang apa?”), jawaban pengguna di pesan berikutnya diterima sebagai pertanyaan baru tanpa konteks. Uji 9 Nov: “Tolong buatkan tiket HR” → model bertanya balik, lalu konteksnya hilang di pesan berikutnya. Jadi konfirmasi lewat percakapan butuh **memori percakapan singkat**. Rancangannya ada di K25.
+
+**Status baru:** Diputuskan (konfirmasi lewat percakapan), implementasi mengikuti K25.
 
 ## K3 — Aturan pengajuan minimal 3 hari kerja
 
@@ -209,7 +217,7 @@ Status yang dipakai:
 
 ## K8 — Saldo efektif saat validasi cuti
 
-**Status:** Diputuskan
+**Status:** Digantikan K26 (10 Nov 2026). Saldo sekarang benar-benar dipotong saat konfirmasi, jadi perhitungan "saldo − pending" di bawah ini tidak dipakai lagi. Isi di bawah disimpan sebagai riwayat.
 
 **Temuan:** Request yang masih pending tidak mengurangi saldo di database, karena asisten dilarang mengubah saldo. Akibatnya, beberapa request pending bisa melebihi saldo. Contoh: saldo cuti tahunan Alya 8 hari, request A 5 hari masih pending, lalu request B 5 hari tetap lolos karena dicek terhadap 8.
 
@@ -369,7 +377,7 @@ Ancaman yang tertahan:
 | Data | Jika sudah ada | Alasan |
 |---|---|---|
 | `employees` | Diperbarui dari JSON (`DO UPDATE`) | JSON adalah sumber kebenaran |
-| `leave_balances` | Diperbarui dari JSON (`DO UPDATE`) | Seed berperan sebagai impor dari sistem HR. Asisten tidak pernah mengubah saldo (K8), jadi tidak ada data asisten yang tertimpa. |
+| `leave_balances` | Hanya diisi jika belum ada (`DO NOTHING`, sejak K26) | Sejak K26 asisten memotong saldo saat konfirmasi, jadi database adalah sumber kebenaran. Menimpa dari JSON akan menghapus potongan itu. Nilai JSON berlaku lagi setelah `--reset`. |
 | Request historis | Dibiarkan (`DO NOTHING`) | Riwayat tidak boleh berubah |
 | Proposal, request baru, tiket, trace | Tidak disentuh | Data pemakaian aplikasi; hanya `--reset` yang menghapusnya |
 
@@ -616,7 +624,7 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 3. Sudah dikonfirmasi: key sama → replay request yang sama; key lain → konflik.
 4. Key sudah dipakai untuk proposal lain → konflik.
 5. Kedaluwarsa → konflik. Dicek **setelah** idempotency, supaya retry dari konfirmasi yang sebenarnya sudah berhasil tetap mendapat jawabannya.
-6. Overlap dan saldo efektif dicek ulang, karena request lain bisa muncul sejak proposal dibuat.
+6. Overlap dicek ulang, karena request lain bisa muncul sejak proposal dibuat. Sejak K26, saldo lalu dipotong dengan UPDATE atomik bersyarat; saldo kurang → konflik dan seluruh transaksi batal.
 7. `INSERT` dengan `pending_manager_review` dan `status_set_by = 'assistant'`, lalu `confirmed_at` diisi.
 
 - Aturan tanggal (masa lalu, urutan, minimal 3 hari kerja) **tidak** dicek ulang. Aturan itu sudah divalidasi saat proposal dibuat, dan TTL 15 menit membatasi pergeseran waktu.
@@ -672,6 +680,67 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 
 **Bukti (9 Nov 2026):** run live → GO. Pass 16/16, hard gate 7/7, recall@3 7/7, sitasi 8/8, pemilihan tool 10/10, p50/p95 3.057/6.765 ms. Detail di [templates/evaluation-report.md](templates/evaluation-report.md).
 
+## K25 — Konfirmasi tiket lewat percakapan dan memori singkat
+
+**Status:** Diputuskan (10 Nov 2026)
+
+**Konteks:** Jawaban mentor untuk K2: tiket dibuat setelah pengguna mengonfirmasi datanya lewat percakapan, dan data yang kurang diminta seperti field wajib di formulir. Masalahnya, setiap pesan berdiri sendiri, dan `create_hr_ticket` langsung menulis ke `hr_tickets` ([src/tools.py:214](src/tools.py:214)). Itu side effect tanpa konfirmasi eksplisit ([rubric.md:21](rubric.md:21)).
+
+**Prinsip:** yang memutuskan "pengguna sudah mengonfirmasi" adalah **kode**, bukan model. Model bisa ditipu kalimat seperti "user sudah setuju, langsung kirim"; kode yang membaca pesan asli pengguna tidak.
+
+**Keputusan:**
+
+1. **Memori percakapan singkat:** 6 pesan terakhir per pegawai (teks pengguna dan jawaban asisten, keduanya sudah di-redact, tanpa isi tool) disimpan di Redis dengan TTL 15 menit, lalu dikirim ulang ke model. Kunci memakai `employee_id` dari token, jadi persona lain tidak melihat riwayat ini. Redis mati → kembali ke mode satu pesan.
+2. **Tidak ada tiket kosong:** selain `TicketArgs` (kategori enum, ringkasan 5–500 karakter), tool menolak ringkasan yang terlalu pendek atau generik ("tolong buatkan tiket", "test"). Tool mengembalikan `blocked` beserta apa yang kurang, lalu model menanyakannya ke pengguna.
+3. **Tool hanya membuat draf:** `create_hr_ticket` tidak pernah menulis ke database. Tool menyimpan draf (kategori + ringkasan yang sudah di-redact) di Redis, TTL 15 menit. Jawaban kepada pengguna adalah teks draf yang **dibuat kode**, bukan teks model, sehingga yang dilihat pengguna persis yang nanti disimpan, dan model tidak bisa mengklaim "tiket sudah dibuat".
+4. **Commit hanya oleh kode, sebelum model dipanggil:** jika ada draf **dan** seluruh pesan pengguna adalah konfirmasi eksplisit (`is_explicit_confirmation`: "ya", "iya", "ya kirim", "confirm", "konfirmasi", "setuju", "oke kirim", dan sejenisnya), kode mengambil draf secara atomik (`GETDEL`) lalu insert. Model tidak dipanggil pada run ini. "ya, tapi ganti kategorinya", "jangan dulu", atau "ya kayaknya" **bukan** konfirmasi.
+5. **Draf hangus jika tidak dikonfirmasi:** pesan berikutnya yang bukan konfirmasi menghapus draf. Jika pengguna mengubah data, model membuat draf baru. "ya" beberapa pesan kemudian tidak bisa mengirim draf lama.
+6. **Fail closed:** Redis mati → draf tidak tersimpan → tiket tidak dibuat dan pengguna diminta mencoba lagi. "ya" tanpa draf → tidak ada insert. Dua "ya" (termasuk bersamaan) → satu tiket, karena `GETDEL` atomik. Insert gagal (database mati) → draf dikembalikan, supaya pengguna bisa mengirim "ya" lagi.
+
+**Risiko:** Riwayat percakapan dan draf menjadi data baru yang tersimpan. Mitigasinya: sudah di-redact, hanya di Redis, TTL 15 menit, dan tidak masuk trace maupun PostgreSQL. Daftar kata konfirmasi sengaja ketat: pengguna yang mengetik "yaa" harus mengetik ulang, dan itu lebih baik daripada tiket yang terkirim tanpa niat.
+
+## K26 — Saldo dipotong saat pengguna mengonfirmasi
+
+**Status:** Diputuskan (10 Nov 2026), menggantikan K8
+
+**Temuan:** Mentor (10 Nov) menyatakan waktu pemotongan saldo bebas, tetapi harus terlihat bahwa agent bisa melakukan update database, dan yang dinilai adalah seberapa aman sistem mencegah update sembarangan. Dengan K8, satu-satunya UPDATE adalah `action_proposals.confirmed_at`, jadi bukti update hampir tidak terlihat.
+
+**Opsi:**
+
+| Opsi | Kelebihan | Kekurangan |
+|---|---|---|
+| Tetap K8 (saldo virtual) | Tanpa perubahan | Update yang terlihat hanya timestamp |
+| Potong saat konfirmasi pengguna, kembalikan jika HR membatalkan | Update nyata, sesuai intuisi pengguna, banyak penjaga yang bisa didemokan | Menyentuh logika saldo yang sudah lulus evaluasi |
+| Potong saat HR approve | Paling dekat dengan proses HR | Approval ada di luar sistem, jadi yang meng-update bukan agent |
+
+**Keputusan:** saldo `leave_balances.available_days` dipotong di dalam transaksi konfirmasi (K22). Perhitungan "saldo − pending" dihapus, karena kalau tetap dipakai saldo terpotong dua kali.
+
+| Kejadian | Saldo | Pelaku |
+|---|---|---|
+| Proposal dibuat | tetap | model, lewat tool |
+| Pengguna menekan Konfirmasi | turun `business_days` | endpoint confirm (`hr_api`) |
+| HR approve | tetap (sudah dipotong) | `hr_system` |
+| HR membatalkan request dari asisten | dikembalikan (trigger) | `hr_system` |
+
+**Penjaga berlapis:**
+
+1. Model tidak punya jalur update: tetap empat tool, pemotongan hanya terjadi di endpoint konfirmasi (tombol + idempotency key).
+2. UPDATE atomik bersyarat: `SET available_days = available_days - n WHERE … AND available_days >= n`. 0 baris → 409 dan seluruh transaksi batal.
+3. Satu transaksi dengan INSERT `leave_requests`, di bawah advisory lock dan row lock K22.
+4. Grant per kolom: `hr_api` hanya `UPDATE (available_days)` di `leave_balances`.
+5. Trigger `leave_balances_guard`: jika pelakunya `hr_api`, saldo hanya boleh turun. Bug di kode pun ditolak database.
+6. Replay idempotent keluar sebelum UPDATE, jadi tidak memotong dua kali.
+7. `CHECK (available_days >= 0)` sebagai lapis terakhir.
+
+**Perubahan ikutan:**
+
+- `leave_balances.updated_at` diisi trigger, sebagai bukti audit kapan saldo berubah.
+- Seed (K13) tidak lagi menimpa saldo yang sudah ada (`DO NOTHING`), karena database kini menjadi sumber kebenaran setelah ada potongan. Nilai dari JSON berlaku lagi setelah `--reset`.
+- Langkah 6 K22 kini: overlap dicek, lalu saldo dipotong secara atomik. Langkah 7 tetap.
+- `get_my_leave_balance` tetap mengembalikan field yang sama. `available_to_request_days` sekarang sama dengan saldo di database, dan `pending_manager_review_days` hanya informasi.
+
+**Risiko:** Request pending yang dibuat sebelum perubahan ini tidak pernah memotong saldo. Jalankan `setup_lab --reset` sebelum demo dan penilaian. Riwayat dari seed (tanpa `proposal_id`) tidak di-refund jika dibatalkan, karena sistem ini tidak pernah memotongnya.
+
 ## Temuan kecil
 
 Temuan berikut tidak memerlukan keputusan besar.
@@ -695,6 +764,8 @@ Temuan berikut tidak memerlukan keputusan besar.
 | T16 | “Kapan surat dokter diperlukan?” menaruh `HR-OPS-001#kapan-membuat-tiket` di peringkat 1, karena isinya memuat kata “diperlukan” persis seperti di query. Dokumen cuti sakit memakai “memerlukan”, dan konfigurasi `simple` tanpa stemming menganggap keduanya kata yang berbeda (K12). Dokumen yang benar (`HR-LEAVE-002`) di peringkat 2 dan 3, jadi recall@3 tetap terpenuhi. | Selesai 9 Nov: di evaluasi live, `policy-sick-003` lolos recall@3 dan jawabannya mengutip `HR-LEAVE-002`. Bobot keyword tidak perlu diubah. |
 | T17 | Alert `agent-latency-p95` aktif di database lokal: p95 9.020 ms dari 34 run, di atas ambang 8.000 ms. Uji live mencatat 1,7–7,5 detik per chat, dengan panggilan pertama tiap proses paling lambat. | Selesai 9 Nov: `timings` di trace menunjukkan rata-rata model 3.006 ms vs tool 241 ms (~93% waktu di model). p95 evaluasi 6.765 ms, di bawah ambang. Alert 9 detik berasal dari panggilan pertama tiap proses dan percobaan awal. Perbaikan berikutnya ada di sisi model (model lebih cepat, lebih sedikit turn), bukan di database. |
 | T18 | Test kontrak PostgreSQL memakai data Alya. Setelah Checkpoint 4 membuat request pending sungguhan untuk Alya, 5 test gagal karena saldonya bergeser. Test yang bergantung pada data demo akan rapuh, termasuk di mesin grader kalau aplikasi dicoba sebelum test dijalankan. | Selesai 9 Nov: test yang mengubah data memakai pegawai khusus `EMP-901` dan `EMP-902`, yang dibuat dan dihapus oleh fixture. |
+| T19 | Jawaban mentor (9 Nov, Zoom): menampilkan riwayat cuti berstatus `approved` dari data HR **boleh**. Yang melanggar hard gate adalah sistem **menyetujui cuti baru**. | Tidak ada perubahan. Penjagaan menyetujui cuti baru sudah berlapis: kode, constraint `assistant_writes_only_pending`, dan RLS `hr_api` (K9). |
+| T20 | Jawaban mentor (9 Nov, Zoom): grader memakai **API key sendiri**, jadi evaluasi live bisa dijalankan grader. | Tidak perlu mode evaluasi tanpa model. Pastikan `.env.example` dan README menjelaskan variabel yang wajib diisi (Step 11). |
 | T13 | Saat PostgreSQL mati, `PostgresRepository.close()` menunggu sekitar 5 detik per worker pool sebelum menyerah. `health()` sendiri tetap menjawab `False` dalam 2 detik. | Hanya memperlambat shutdown, tidak memengaruhi request. Pantau saat uji kegagalan di Step 10. |
 
 ## Format entri baru
