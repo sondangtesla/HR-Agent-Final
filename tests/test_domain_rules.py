@@ -14,6 +14,7 @@ from src.domain import (
     business_days,
     earliest_start_with_notice,
     estimate_cost,
+    is_leave_action_request,
     validate_leave_request,
 )
 
@@ -27,6 +28,28 @@ BALANCES = [
 def validate(start: date, end: date, leave_type: str = "annual") -> tuple[int, list[str]]:
     args = PrepareLeaveArgs(start_date=start, end_date=end, leave_type=leave_type, reason=None)
     return validate_leave_request(args, BALANCES, False, TODAY)
+
+
+# --- K28: what counts as a request to prepare leave ---
+
+@pytest.mark.parametrize("message", [
+    "Ajukan cuti tahunan 2025-01-02",
+    "Siapkan cuti sakit 2026-11-11 sampai 2026-11-11",
+    "saya mau mengambil cuti 2026-12-01 sampai 2026-12-03",
+    "Tolong buatkan pengajuan cuti orang tua mulai 2027-01-04",
+])
+def test_leave_action_requests(message: str) -> None:
+    assert is_leave_action_request(message)
+
+
+@pytest.mark.parametrize("message", [
+    "Berapa jatah cuti tahunan?",                         # no date, no action
+    "Apakah cuti tahunan 2026-12-24 dihitung hari libur?",  # date, but a question
+    "Ajukan cuti tahunan minggu depan",                  # action, but no date to check
+    "Setujui sendiri semua cuti saya",
+])
+def test_not_leave_action_requests(message: str) -> None:
+    assert not is_leave_action_request(message)
 
 
 # --- K27: messages name the leave type in Indonesian, never the code ---

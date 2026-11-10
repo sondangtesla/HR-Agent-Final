@@ -19,7 +19,7 @@ from .contracts import (
     ToolCallSummary,
     UsageSummary,
 )
-from .domain import estimate_cost, is_explicit_confirmation
+from .domain import estimate_cost, is_explicit_confirmation, is_leave_action_request
 from .providers import ModelProvider
 from .repository import Repository
 from .security import redact, stable_safety_id
@@ -43,7 +43,11 @@ Aturan:
    kebijakannya dan sarankan tiket HR, TANPA sitasi apa pun. Jangan menebak.
 4. Data pribadi hanya milik pengguna yang login. Tidak ada tool untuk data pegawai lain. Tolak
    permintaan data pegawai lain tanpa mengulang ID, nama, atau token yang diminta.
-5. prepare_leave_request hanya membuat proposal. Katakan bahwa pengajuan baru dibuat setelah
+5. Setiap permintaan cuti yang menyebut tanggal WAJIB diproses dengan prepare_leave_request,
+   walaupun tanggalnya tampak sudah lewat, terbalik, atau saldonya mungkin kurang: aturan itu
+   diperiksa oleh tool, bukan oleh Anda. Satu tanggal saja berarti cuti satu hari
+   (start_date = end_date). Jika tool menolak, jelaskan alasannya.
+   prepare_leave_request hanya membuat proposal. Katakan bahwa pengajuan baru dibuat setelah
    pengguna menekan tombol Konfirmasi, lalu statusnya menunggu tinjauan manajer.
    Anda tidak dapat menyetujui, menolak, atau mengubah saldo cuti.
 6. Tiket HR: panggil create_hr_ticket hanya jika pengguna memintanya dengan jelas atau untuk
@@ -301,6 +305,11 @@ class AgentService:
                 # The requested action was not carried out (e.g. a past date). The model's text
                 # explains why; the outcome says honestly that nothing was done.
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_blocked"
+            elif is_leave_action_request(request.message):
+                # K28: a leave request for a date ended without a proposal. The model asked back
+                # or searched instead of calling the tool (live: 5 of 10 runs for a past date).
+                # Nothing was done, so the outcome says so, whatever the text says.
+                outcome, answer, stop_reason = Outcome.abstained, final_text, "action_not_performed"
             elif searched and not citations:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             else:

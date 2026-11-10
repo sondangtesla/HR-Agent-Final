@@ -159,6 +159,22 @@ def test_blocked_leave_request_is_reported_as_abstained(repository: MemoryReposi
     assert "masa lalu" in response.answer  # the reason is still explained to the user
 
 
+def test_leave_request_the_model_did_not_carry_out_is_abstained(repository: MemoryRepository) -> None:
+    """K28, live finding: in 5 of 10 runs the model skipped the tool for a past date and asked
+    back or searched policy instead. Nothing was proposed, so the outcome must not be "answered"."""
+    asked_back = ScriptedProvider([text_turn("Tanggal itu sudah lewat. Tanggal mulai yang Anda maksud kapan?")])
+    response = make_agent(repository, asked_back).run(ChatRequest(message="Ajukan cuti tahunan 2025-01-02"), ALYA)
+    assert response.outcome == "abstained" and response.action_proposal is None
+    assert "sudah lewat" in response.answer  # the model's explanation still reaches the user
+    assert repository.get_trace(response.trace_id)["stop_reason"] == "action_not_performed"
+
+
+def test_a_question_that_mentions_a_date_is_still_answered(repository: MemoryRepository) -> None:
+    provider = ScriptedProvider([text_turn("Tanggal itu hari kerja biasa.")])
+    response = make_agent(repository, provider).run(ChatRequest(message="Apakah 2026-12-24 hari kerja?"), ALYA)
+    assert response.outcome == "answered"
+
+
 def test_unknown_policy_abstains(repository: MemoryRepository) -> None:
     response = make_agent(repository, DeterministicProvider()).run(
         ChatRequest(message="Berapa subsidi perjalanan ke Mars?"), ALYA

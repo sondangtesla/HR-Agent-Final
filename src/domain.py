@@ -138,6 +138,27 @@ def validate_leave_request(
     return days, summary
 
 
+# --- Leave action requests (K28) ---
+
+# "Ajukan cuti tahunan 2025-01-02": a leave word, an action verb, and a date. Narrow on purpose:
+# a policy question that mentions a date ("apakah 2026-12-24 libur?") is not an action request.
+LEAVE_ACTION_VERBS = frozenset({
+    "ajukan", "mengajukan", "diajukan", "siapkan", "menyiapkan", "buatkan", "ambil", "mengambil",
+    "minta", "meminta", "request",
+})
+ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+
+
+def is_leave_action_request(message: str) -> bool:
+    """True when the user asks the assistant to prepare a leave request for a given date.
+
+    Used only to label the outcome honestly (K24/K28): if such a request ends without a proposal,
+    nothing was done, whatever the model wrote instead.
+    """
+    words = set(_words(message))
+    return "cuti" in words and bool(words & LEAVE_ACTION_VERBS) and bool(ISO_DATE.search(message))
+
+
 # --- HR ticket rules (K25) ---
 
 # Every word of the message must come from these two sets, and at least one must be a
