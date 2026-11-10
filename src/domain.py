@@ -31,6 +31,13 @@ RULE_POLICY_VERSIONS = {
 # Requests that still occupy their dates. Cancelled ones do not.
 ACTIVE_STATUSES = frozenset({"pending_manager_review", "approved"})
 
+# Messages are shown to employees, so they name the leave type in Indonesian, not the code.
+LEAVE_TYPE_NAMES = {"annual": "tahunan", "sick": "sakit", "parental": "orang tua"}
+
+
+def leave_type_name(leave_type: str) -> str:
+    return LEAVE_TYPE_NAMES.get(leave_type, leave_type)
+
 
 # K3: "paling lambat tiga hari kerja sebelum tanggal mulai" (data/policies/annual-leave.md).
 # The submission day counts: submitted Wednesday -> earliest start is next Monday.
@@ -113,17 +120,17 @@ def validate_leave_request(
     # 6. Balance (K26: already net of confirmed requests)
     balance = next((b for b in balances if b.leave_type == args.leave_type), None)
     if balance is None:
-        raise DomainError(f"Saldo cuti {args.leave_type} tidak ditemukan.")
+        raise DomainError(f"Saldo cuti {leave_type_name(args.leave_type)} tidak ditemukan.")
     if days > balance.available_days:
         raise DomainError(
-            f"Saldo cuti {args.leave_type} tidak cukup: diminta {days} hari kerja, "
+            f"Saldo cuti {leave_type_name(args.leave_type)} tidak cukup: diminta {days} hari kerja, "
             f"tersedia {balance.available_days} hari."
         )
 
     summary = [
         f"Rentang {start.isoformat()} s.d. {end.isoformat()} berisi {days} hari kerja.",
         "Tidak ada tumpang tindih dengan permintaan aktif.",
-        f"Saldo cuti {args.leave_type} cukup: tersedia {balance.available_days} hari, "
+        f"Saldo cuti {leave_type_name(args.leave_type)} cukup: tersedia {balance.available_days} hari, "
         f"sisa {balance.available_days - days} hari setelah pengajuan ini.",
     ]
     if args.leave_type in NOTICE_RULE_LEAVE_TYPES:

@@ -8,6 +8,7 @@ import httpx
 import streamlit as st
 
 from ui_contract import API_PATHS, load_personas, select_persona
+from ui_format import confirmation_message, proposal_markdown
 
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
@@ -52,8 +53,10 @@ with chat_tab:
                     st.write(citation["excerpt"])
         proposal = result.get("action_proposal")
         if proposal:
-            st.warning("Tindakan belum dijalankan. Periksa detail lalu konfirmasikan.")
-            st.json(proposal)
+            st.warning("Pengajuan cuti belum dibuat. Periksa detail di bawah, lalu tekan Konfirmasi.")
+            st.markdown(proposal_markdown(proposal))
+            with st.expander("Detail teknis"):
+                st.json(proposal)
             key_name = f"idem_{proposal['proposal_id']}"
             st.session_state.setdefault(key_name, str(uuid.uuid4()))
             if st.button("Konfirmasi pembuatan permintaan pending", key=proposal["proposal_id"]):
@@ -64,7 +67,7 @@ with chat_tab:
                     json={"idempotency_key": st.session_state[key_name]},
                 )
                 if confirmed:
-                    st.success(f"Permintaan {confirmed['request_id']} berstatus {confirmed['status']}.")
+                    st.success(confirmation_message(confirmed))
 
 with leave_tab:
     if st.button("Muat permintaan saya"):

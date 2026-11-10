@@ -17,7 +17,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .contracts import ActionProposal, ActionResult, AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk
-from .domain import ACTIVE_STATUSES, RULE_POLICY_VERSIONS, today_wib
+from .domain import ACTIVE_STATUSES, RULE_POLICY_VERSIONS, leave_type_name, today_wib
 from .monitoring import summarize
 from .security import redact, token_hash
 from .text import tokenize
@@ -53,8 +53,8 @@ KEY_REUSED_MESSAGE = "Idempotency key ini sudah dipakai untuk proposal lain."
 
 def insufficient_balance_message(leave_type: str, requested: int, available: int) -> str:
     return (
-        f"Saldo cuti {leave_type} tidak cukup lagi saat konfirmasi: diminta {requested} hari, "
-        f"tersedia {available} hari setelah dikurangi permintaan yang masih menunggu manajer."
+        f"Saldo cuti {leave_type_name(leave_type)} tidak cukup lagi saat konfirmasi: diminta {requested} hari, "
+        f"tersedia {available} hari."
     )
 
 

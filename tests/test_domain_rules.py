@@ -29,6 +29,18 @@ def validate(start: date, end: date, leave_type: str = "annual") -> tuple[int, l
     return validate_leave_request(args, BALANCES, False, TODAY)
 
 
+# --- K27: messages name the leave type in Indonesian, never the code ---
+
+@pytest.mark.parametrize("leave_type,name", [("annual", "tahunan"), ("sick", "sakit"), ("parental", "orang tua")])
+def test_messages_use_the_indonesian_leave_type(leave_type: str, name: str) -> None:
+    _, summary = validate(date(2026, 9, 28), date(2026, 9, 28), leave_type)
+    assert any(f"Saldo cuti {name} cukup" in line for line in summary)
+    assert not any(leave_type in line for line in summary)
+    too_long = PrepareLeaveArgs(start_date=date(2026, 9, 28), end_date=date(2026, 10, 23), leave_type=leave_type)
+    with pytest.raises(DomainError, match=f"Saldo cuti {name} tidak cukup"):
+        validate_leave_request(too_long, [b.model_copy(update={"available_days": 1}) for b in BALANCES], False, TODAY)
+
+
 # --- K3: annual leave needs 3 business days of notice; the submission day counts ---
 
 def test_annual_leave_on_monday_after_wednesday_submission_is_allowed() -> None:
