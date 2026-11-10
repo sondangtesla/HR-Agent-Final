@@ -1,9 +1,12 @@
+# Secrets and local state never enter the build context (docker-delivery.md, Security Note).
 .env*
 .venv/
 .git/
-__pycache__/
-*.py[cod]
-.pytest_cache/
+.claude/
+# `**/` so caches inside src/ and tests/ are excluded too, not only at the top level.
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
 .ruff_cache/
 outputs/
 *.log

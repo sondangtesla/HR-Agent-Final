@@ -13,6 +13,9 @@ from .contracts import ModelToolCall, ModelTurn
 from .text import tokenize
 
 
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+
 class ModelProvider(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
     def respond(
@@ -50,9 +53,12 @@ class OpenAIProvider:
         self.embedding_dimensions = int(embedding_dimensions)
         # The SDK retries transient failures (connection errors, 408, 409, 429, 5xx) with backoff.
         # max_retries makes that retry bounded; timeout bounds every single attempt.
+        # base_url is never left to the SDK: with base_url=None it reads OPENAI_BASE_URL from the
+        # environment, and Compose always sets it, to "" when unset. The SDK then sends every
+        # request to "" (found in the clean-checkout Docker run, 10 Nov 2026).
         self.client = OpenAI(
             api_key=api_key,
-            base_url=base_url,
+            base_url=base_url or DEFAULT_OPENAI_BASE_URL,
             timeout=timeout_seconds,
             max_retries=max_retries,
         )
