@@ -40,6 +40,7 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K32 | Retrieval hanya membaca kebijakan yang berlaku | **Diputuskan** | 2026-11-11 |
 | K33 | Redaction medis diperluas tanpa menelan permintaan | **Diputuskan** | 2026-11-11 |
 | K34 | Angka di jawaban wajib berasal dari bukti run | **Diputuskan** | 2026-11-11 |
+| K35 | Jujur saat pencarian gagal, `/readyz` cek schema, dan cek angka lebih ketat (hasil verifikasi Docker) | **Diputuskan** | 2026-11-12 |
 
 Status yang dipakai:
 
@@ -830,7 +831,7 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 
 **Bukti:** test agent, reliability (mentor), privacy, dan ticket confirmation lulus. Ditambah 3 test baru di `tests/test_agent.py`: argumen sisipan tetap ditolak, nama tool karangan tetap tercatat, dan pesan batas LangChain tidak pernah sampai ke user. Test terakhir ini **gagal** kalau mode diganti ke `"end"` (dicek dengan mengubah kodenya sementara).
 
-**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`, dari working tree):** image ter-build dengan 3 dependency baru. Seluruh suite lulus di container (308 test, 0 di-skip). Evaluasi live hasilnya GO 16/16 (hard gates, recall@3, dan validitas sitasi 100%), dan tool yang dipilih di ke-16 kasus identik dengan evaluasi 10 Nov (loop manual). Payload ke provider direkam dengan provider palsu: tools dan input sama persis dengan loop manual, jadi migrasi tidak menambah token. Kenaikan token input 27.336 → 30.302 (tepat +111 per panggilan model) seluruhnya berasal dari kalimat aturan angka K34.
+**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`, dari working tree):** image ter-build dengan 3 dependency baru. Seluruh suite lulus di container (308 test, 0 di-skip). Evaluasi live hasilnya GO 16/16 (hard gates, recall@3, dan validitas sitasi 100%), dan tool yang dipilih di ke-16 kasus identik dengan evaluasi 10 Nov (loop manual). Payload ke provider yang baru direkam dengan provider palsu, lalu dibandingkan dengan yang dibangun kode lama di `522f742` (dibaca dari source-nya, bukan dijalankan): tools dan input sama persis, jadi migrasi tidak menambah token. Token input naik dari 27.336 (pembanding 10 Nov, dibuat **sebelum K28**) menjadi 30.302, dan 31.667 di evaluasi checkout bersih. Sekitar +111 token per panggilan model berasal dari system prompt yang bertambah 447 karakter (K28 +336, K34 +111; perkiraan 4 karakter per token). Sisanya variasi model, misalnya `leave-confirm-010` memilih search di run terakhir (2.325 token, bukan 943).
 
 **Risiko (K30):** `requirements.txt` bertambah 3 dependency, sehingga image Docker harus di-build ulang. Build dan evaluasi live sudah diulang dari working tree; uji dari `git clone` bersih (K29) masih harus diulang setelah commit. Graph dikompilasi sekali per `AgentService` dan dipakai bersama oleh semua request. Data per-run hanya boleh disimpan di `AgentRun`, tidak di atribut middleware.
 
@@ -928,9 +929,44 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 
 **Bukti:** `tests/test_grounding.py` (10 test: normalisasi angka dan pengabaian ID). `tests/test_agent.py`: angka salah di balik sitasi valid di-abstain dan sitasinya tetap tampil; angka dari dokumen, tool saldo, dan pesan user diterima; mode `shadow` hanya mencatat. `tests/test_evaluation.py`: fakta wajib yang hilang membuat kasus gagal. Dengan penegakan dimatikan, test angka-salah gagal (dicek dengan mengubah kodenya sementara). Ke-104 test agent, API, dan aksi yang sudah ada tetap lulus dengan penegakan aktif.
 
-**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`):** dua run evaluasi menghasilkan 33 trace. Tidak ada satu pun yang berisi `unsupported_numbers`, tidak ada abstain baru, dan hasilnya GO 16/16. Biaya: kalimat aturan di system prompt menambah 111 token input per panggilan model (+11% di evaluasi).
+**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`):** dua run evaluasi menghasilkan 33 trace. Tidak ada satu pun yang berisi `unsupported_numbers`, tidak ada abstain baru, dan hasilnya GO 16/16. Biaya: kalimat aturannya 111 karakter, sekitar 28 token input per panggilan model (perkiraan 4 karakter per token). Kenaikan token +11% yang terlihat di evaluasi sebagian besar berasal dari K28, bukan K34 (lihat K30).
 
 **Risiko:** sampelnya kecil (16 pertanyaan berbeda). Alarm palsu yang masih mungkin terjadi adalah model menulis angka turunan atau format tanggal lain ("31/03"). Akibatnya, kasus yang seharusnya `answered` menjadi `abstained`. Kalau itu muncul, periksa `unsupported_numbers` di trace, lalu perbaiki normalisasi atau gunakan `shadow` sementara. Angka kecil yang muncul di tanggal berlaku (1 dari "2026-01-01") tetap bisa "membenarkan" jawaban yang salah dengan angka yang sama. Pemeriksaan ini menangkap angka yang **berbeda**, bukan semua kesalahan.
+
+## K35 — Jujur saat pencarian gagal, `/readyz` cek schema, dan cek angka lebih ketat
+
+**Status:** Diputuskan (12 Nov 2026)
+
+**Temuan (dari verifikasi Docker dan review K34, bukan dari test di laptop):**
+
+1. **T13.** Pada database yang di-seed sebelum K32 (tanpa kolom `status`), `/readyz` tetap `ready`. `index_status()` hanya menghitung baris dan embedding, sementara query pencarian membaca `status`.
+2. **T14.** Pencarian yang error membuat chat tercatat `answered`. `run.searched` hanya bernilai True kalau pencarian sukses, sehingga aturan "sudah mencari tapi tanpa sitasi → abstain" terlewati.
+3. **Tanggal hari ini.** `today` masuk ke bukti dan dipecah menjadi angka lepas, sehingga "cuti tahunan 11 hari" lolos pada 11 November.
+4. **Angka tertukar antar-fakta.** "Pengajuan paling lambat 12 hari kerja" lolos cek K34, karena 12 memang ada di kebijakan (sebagai jatah cuti, bukan batas pengajuan). Cek K34 hanya bertanya apakah angkanya ada.
+
+**Keputusan:**
+
+- **T13.** `index_status()` menambah `active_chunks` (`count(*) FILTER (WHERE status = 'berlaku')`), memakai kolom yang sama dengan pencarian. Pada schema lama PostgreSQL melempar `UndefinedColumn`. `/readyz` menangkapnya dan menjawab 503 `not_ready` dengan `checks["index"] = "schema_outdated"`.
+- **T14.** `AgentRun.search_failed` diisi saat tool pencarian berstatus `error`. Kalau pencarian gagal dan jawaban tanpa sitasi, outcome menjadi `abstained` dengan `stop_reason = "search_failed"`. Pencarian yang gagal sekali lalu berhasil pada percobaan ulang tetap `answered`.
+- **Tanggal.** `today` keluar dari `evidence`. Tanggal utuh dibuang dari **salinan** teks jawaban sebelum angka dibaca (`final_text.replace(today, "")`), sedangkan teks yang tampil ke user tidak berubah.
+- **Cek konteks angka** (`number_context_mismatches`, `src/grounding.py`). Per klausa jawaban, sebuah angka ditandai kalau klausa itu lebih mirip klausa kebijakan milik fakta **lain** daripada klausa yang membawa angkanya. Kata penghubung, satuan, dan kata bilangan tidak dihitung. Hanya angka yang ada di teks kebijakan yang dinilai. Angka dari pesan user dilewati, dan angka yang tidak ada di mana pun tetap tugas cek biasa. **Mode shadow**: trace mencatat `number_context_mismatch`, dan outcome tidak berubah.
+- **Kasus evaluasi** `policy-notice-017` di `evaluation/regression_cases.json`, dengan fakta wajib 3. Test `test_required_facts_only_name_real_cases` ikut membaca file regresi.
+
+**Opsi yang tidak dipilih:** langsung memblokir dari cek konteks, karena belum ada data parafrase bebas. Mencocokkan angka dan satuan saja, karena kedua fakta bersatuan "hari kerja" sehingga tidak terbedakan. LLM sebagai hakim, dengan alasan yang sama seperti K34.
+
+**Bukti:**
+
+- Test ditulis lebih dulu dan merah sebelum patch (16 test baru). Di Docker dengan PostgreSQL sungguhan: **324 test lulus, 0 di-skip**.
+- Satu bug tertangkap hanya oleh versi PostgreSQL dari test kontrak: koma yang hilang di SQL `index_status`. Versi memory tidak bisa menangkapnya.
+- Prototipe cek konteks pada 16 jawaban model live (run 12 Nov): 0 alarm. Dua contoh tertukar tertangkap, dan lima jawaban benar atau parafrase tidak ditandai.
+- Evaluasi live dari checkout bersih commit `2174048`: **GO 17/17**, hard gates 7/7, recall@3 8/8, keempat gate global lolos. Di ke-17 trace, `unsupported_numbers` dan `number_context_mismatch` kosong semuanya.
+
+**Risiko:**
+
+1. Data shadow hanya dari 17 jawaban, dan jawaban kebijakannya mengikuti redaksi dokumen dengan dekat. Alarm palsu pada parafrase bebas belum terukur. Sebelum memberlakukannya (enforce), kumpulkan lebih banyak jawaban dan baca `number_context_mismatch` di trace.
+2. Satu klausa yang memuat dua fakta tanpa tanda baca pemisah bisa memicu alarm palsu.
+3. Angka dari tool selain pencarian (misalnya saldo) tidak dinilai konteksnya.
+4. Perbaikan tanggal hanya menutup tanggal **hari ini**. Tanggal lain di output tool (`effective_date`, misalnya `2026-01-01`) masih memecah angka kecil, sehingga batas yang dicatat di K34 tetap berlaku.
 
 ## Temuan kecil
 
