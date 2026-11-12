@@ -1,5 +1,5 @@
 risk_id,component,risk,impact,likelihood,control,evidence,owner,status
-R-001,RAG,Hallucinated policy,High,Medium,Citation validator and abstention,,AI Engineer,Open
+R-001,RAG,Hallucinated policy,High,Medium,"Citation validator, number grounding check (every number must appear in the run's evidence), and abstention","tests/test_agent.py, tests/test_grounding.py, required facts in the evaluator (DECISIONS K20, K34)",AI Engineer,Open
 R-002,Retrieval,Stale policy version,High,Medium,Version metadata and reindex procedure,,HR Operations,Open
 R-003,Agent,Prompt injection,High,Medium,Untrusted-context prompt and allow-listed tools,,Security,Open
 R-004,Authorization,Cross-employee access,Critical,Medium,Identity-bound repository methods,,Backend Engineer,Open
@@ -8,3 +8,4 @@ R-006,Action,Unauthorized leave approval,Critical,Low,Pending-only schema and hu
 R-007,Provider,Outage or rate limit,Medium,Medium,Bounded retry and safe fallback,,AI Platform,Open
 R-008,Performance,Latency spike,Medium,Medium,Hybrid query tuning and Redis cache,,AI Platform,Open
 R-009,Cost,Unexpected token spend,Medium,Medium,Budgets telemetry and configured rates,,Product Owner,Open
+R-010,Privacy,"Medical detail outside the deterministic patterns (an unlisted condition without a trigger word, or unusual phrasing) reaches the model provider",High,Medium,"Trigger words, condition list, and body-part symptom patterns in redact(), applied before the provider, telemetry, ticket summaries, and leave reasons; prompt rule 7; policy routes medical detail to the HR channel","tests/test_security.py (DECISIONS K33)",Privacy Officer,Open

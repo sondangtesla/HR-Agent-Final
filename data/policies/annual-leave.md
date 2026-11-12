@@ -3,6 +3,7 @@ document_id: HR-LEAVE-001
 title: Kebijakan Cuti Tahunan
 version: 2.1
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Hak dan saldo
 

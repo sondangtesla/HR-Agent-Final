@@ -56,6 +56,59 @@ def test_normal_hr_text_is_not_changed(text: str) -> None:
     assert redact(text) == text
 
 
+# --- K33: wider medical redaction, tested in both directions ---
+
+@pytest.mark.parametrize(
+    ("text", "hidden"),
+    [
+        ("Saya didiagnosa vertigo minggu lalu.", "vertigo"),  # "didiagnosa" was not a trigger
+        ("Saya menderita GERD, boleh cuti?", "gerd"),
+        ("Saya mengidap gangguan kecemasan.", "kecemasan"),
+        ("Saya sakit kepala parah, mau cuti sakit besok.", "kepala"),
+        ("Anak saya kena cacar, saya izin.", "cacar"),
+        ("Saya radang tenggorokan sejak kemarin.", "radang"),
+        ("Saya didiagnosis sindrom Meniere.", "meniere"),  # unlisted, caught by the trigger word
+    ],
+)
+def test_wider_medical_detail_is_masked(text: str, hidden: str) -> None:
+    masked = redact(text)
+    assert "[MEDIS]" in masked
+    assert hidden not in masked.lower()
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("Saya didiagnosis hipertensi, jadi mau cuti 2026-11-12.", "jadi mau cuti 2026-11-12"),
+        ("Saya didiagnosis hipertensi jadi mau cuti 2026-11-12.", "jadi mau cuti 2026-11-12"),
+        ("Hasil lab menunjukkan anemia; mohon cuti 2026-11-12.", "mohon cuti 2026-11-12"),
+        ("Saya menderita GERD, boleh cuti?", "boleh cuti?"),
+        ("Saya sakit kepala parah, mau cuti sakit besok.", "mau cuti sakit besok"),
+    ],
+)
+def test_the_request_after_medical_detail_still_reaches_the_agent(text: str, kept: str) -> None:
+    """Before K33 the mask ran to the period and swallowed the leave request and its date."""
+    assert kept in redact(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Saya mau ambil cuti sakit 2 hari mulai 2026-11-12.",
+        "Saya sedang sakit, mau cuti sakit besok.",
+        "Apakah cuti sakit butuh surat dokter?",
+        "Cuti sakit lebih dari dua hari perlu dokumen pendukung?",
+        "Saya kena potong saldo cuti dua kali.",
+        "Saya terkena sanksi karena telat absen.",
+        "Ada gangguan aplikasi, saldo tidak muncul.",
+        "Kapan cuti melahirkan bisa diambil?",
+        "Tim operasional mau tahu kebijakan kerja jarak jauh.",
+    ],
+)
+def test_more_normal_hr_text_is_not_changed(text: str) -> None:
+    assert redact(text) == text
+
+
 def test_safety_id_is_stable_short_and_does_not_reveal_employee_id() -> None:
     first = stable_safety_id("EMP-001")
     assert first == stable_safety_id("EMP-001")

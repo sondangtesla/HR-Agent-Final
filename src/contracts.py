@@ -107,6 +107,8 @@ class PolicyChunk(BaseModel):
     version: str
     effective_date: date
     content: str
+    # K32: only "berlaku" chunks whose effective_date has arrived can ever be retrieved.
+    status: Literal["berlaku", "arsip"] = "berlaku"
     score: float = 0.0
 
 

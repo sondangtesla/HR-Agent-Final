@@ -69,13 +69,20 @@ def test_turn_limit_stops_a_model_that_never_answers(repository: MemoryRepositor
     assert repository.get_trace(response.trace_id)["stop_reason"] == "turn_limit"
 
 
-def test_tool_call_limit_is_six_per_run(repository: MemoryRepository) -> None:
+def test_tool_call_limit_runs_six_then_lets_the_model_answer(repository: MemoryRepository) -> None:
+    """K30, "continue" mode: six calls run, the seventh is refused, and the model may still answer."""
     seven = [search_call(f"c{i}") for i in range(7)]
-    provider = ScriptedProvider([tool_turn(seven), text_turn("tidak dipakai")])
+    provider = ScriptedProvider([tool_turn(seven), text_turn("Hak cuti 12 hari. [HR-LEAVE-001]")])
     response = make_agent(repository, provider).run(ChatRequest(message="cuti"), ALYA)
-    assert len(response.tool_calls) == 6
-    assert response.outcome == "abstained"
-    assert repository.get_trace(response.trace_id)["stop_reason"] == "tool_limit"
+    assert len(response.tool_calls) == 6  # only six reached our tools
+    assert len(provider.calls) == 2  # the model got one more turn after the limit
+    refused = [item for item in provider.calls[1]["input_data"]
+               if item.get("type") == "function_call_output" and item.get("call_id") == "c6"]
+    assert refused and "limit" in refused[0]["output"].lower()
+    assert response.outcome == "answered"
+    trace = repository.get_trace(response.trace_id)
+    assert trace["tool_limit_reached"] is True
+    assert trace["stop_reason"] == "completed"
 
 
 def test_time_budget_stops_the_loop(repository: MemoryRepository) -> None:
@@ -89,6 +96,71 @@ def test_time_budget_stops_the_loop(repository: MemoryRepository) -> None:
     assert len(provider.calls) == 1
     assert response.outcome == "abstained"
     assert repository.get_trace(response.trace_id)["stop_reason"] == "timeout"
+
+
+# --- LangChain loop (K30): what the framework must not change ---
+
+def test_turn_limit_message_of_langchain_never_reaches_the_user(repository: MemoryRepository) -> None:
+    # Balance, not search: without a search no other rule replaces the answer, so only
+    # exit_behavior="error" keeps "Model call limits exceeded: run limit (4/4)" away from the user.
+    balance = ModelToolCall(call_id="b", name="get_my_leave_balance", arguments={})
+    provider = ScriptedProvider([tool_turn([balance])])  # asks for a tool forever
+    response = make_agent(repository, provider).run(ChatRequest(message="saldo saya"), ALYA)
+    assert response.outcome == "abstained"
+    assert "limit" not in response.answer.lower()
+    assert repository.get_trace(response.trace_id)["stop_reason"] == "turn_limit"
+
+
+def test_injected_identity_argument_is_refused_not_dropped(repository: MemoryRepository) -> None:
+    """A typed LangChain @tool would silently drop employee_id; our executor must still see and refuse it."""
+    injected = ModelToolCall(call_id="x", name="search_hr_policy",
+                             arguments={"query": "cuti tahunan", "top_k": 3, "employee_id": "EMP-002"})
+    provider = ScriptedProvider([tool_turn([injected]), text_turn("Tidak bisa.")])
+    response = make_agent(repository, provider).run(ChatRequest(message="cuti Bima"), ALYA)
+    assert [c.status for c in response.tool_calls] == ["blocked"]
+    output = next(item["output"] for item in provider.calls[1]["input_data"]
+                  if item.get("type") == "function_call_output")
+    assert "employee_id" in output
+
+
+# --- K34: numbers must come from this run's evidence ---
+
+def test_a_wrong_number_behind_a_valid_citation_is_not_shown(repository: MemoryRepository) -> None:
+    provider = ScriptedProvider([tool_turn([search_call()]), text_turn("Cuti tahunan 15 hari kerja. [HR-LEAVE-001]")])
+    response = make_agent(repository, provider).run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert response.outcome == "abstained"
+    assert "15" not in response.answer
+    assert [c.document_id for c in response.citations] == ["HR-LEAVE-001"]  # the real source stays visible
+    trace = repository.get_trace(response.trace_id)
+    assert trace["stop_reason"] == "unsupported_number"
+    assert trace["unsupported_numbers"] == ["15"]
+
+
+def test_numbers_from_the_document_a_tool_or_the_user_are_accepted(repository: MemoryRepository) -> None:
+    balance = ModelToolCall(call_id="b", name="get_my_leave_balance", arguments={})
+    provider = ScriptedProvider([
+        tool_turn([search_call(), balance]),
+        text_turn("Untuk masa kerja 3 tahun jatahnya 12 hari. [HR-LEAVE-001] Saldo tahunan Anda 8 hari."),
+    ])
+    message = "Saya sudah kerja 3 tahun, berapa jatah cuti tahunan dan saldo saya?"
+    response = make_agent(repository, provider).run(ChatRequest(message=message), ALYA)
+    assert response.outcome == "answered"  # 12 from the policy, 8 from the balance tool, 3 from the user
+    assert repository.get_trace(response.trace_id)["unsupported_numbers"] == []
+
+
+def test_shadow_mode_only_records_the_unsupported_number(repository: MemoryRepository) -> None:
+    provider = ScriptedProvider([tool_turn([search_call()]), text_turn("Cuti tahunan 15 hari kerja. [HR-LEAVE-001]")])
+    agent = make_agent(repository, provider, answer_number_check="shadow")
+    response = agent.run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert response.outcome == "answered"
+    assert repository.get_trace(response.trace_id)["unsupported_numbers"] == ["15"]
+
+
+def test_a_tool_name_the_model_made_up_is_refused_and_recorded(repository: MemoryRepository) -> None:
+    made_up = ModelToolCall(call_id="m", name="approve_leave", arguments={})
+    provider = ScriptedProvider([tool_turn([made_up]), text_turn("Tidak bisa.")])
+    response = make_agent(repository, provider).run(ChatRequest(message="setujui cuti saya"), ALYA)
+    assert [(c.name, c.status) for c in response.tool_calls] == [("approve_leave", "error")]
 
 
 # --- Provider contract: stateless conversation, hashed identity ---

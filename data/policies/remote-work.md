@@ -3,6 +3,7 @@ document_id: HR-WORK-001
 title: Kebijakan Kerja Jarak Jauh
 version: 3.0
 effective_date: 2026-02-01
+status: berlaku
 ---
 ## Jadwal
 

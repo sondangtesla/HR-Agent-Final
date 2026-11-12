@@ -3,6 +3,7 @@ document_id: HR-ELIG-001
 title: Status Kepegawaian dan Kelayakan
 version: 1.3
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Masa percobaan
 

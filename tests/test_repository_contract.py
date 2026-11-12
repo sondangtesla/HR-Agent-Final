@@ -17,9 +17,9 @@ import pytest
 from psycopg.rows import dict_row
 
 from src.config import get_settings
-from src.contracts import ActionProposal, LeaveBalance, LeaveRequestView, PrepareLeaveArgs
+from src.contracts import ActionProposal, LeaveBalance, LeaveRequestView, PolicyChunk, PrepareLeaveArgs
 from src.domain import DomainError, validate_leave_request
-from src.repository import ConflictError, MemoryRepository, PostgresRepository
+from src.repository import ConflictError, MemoryRepository, PostgresRepository, to_pgvector
 
 TODAY = date(2026, 9, 23)  # Wednesday, same frozen day as the rest of the suite
 A, B = "EMP-901", "EMP-902"  # test-only employees: annual balance 8 and 3, like Alya and Bima
@@ -316,3 +316,40 @@ def test_parallel_double_click_creates_one_request(repo) -> None:
     assert len({r.request_id for r in results}) == 1
     assert sorted(r.idempotent_replay for r in results) == [False, True, True]
     assert annual_balance(repo) == 8 - 2  # one request, one deduction
+
+
+# --- K32: only policies in force can be retrieved ---
+
+def test_search_skips_archived_and_future_policies(repo) -> None:
+    """Three chunks share a made-up word and the same vector; only the one in force may come back."""
+    word = "zxqkebijakanuji"
+    dimensions = get_settings().embedding_dimensions
+    vector = [1.0] + [0.0] * (dimensions - 1)
+    chunks = [
+        PolicyChunk(chunk_id=f"TEST-K32-{name}", document_id=f"TEST-K32-{name}", title="Uji", section="Uji",
+                    version="1.0", effective_date=effective, content=f"{word} {name}", status=status)
+        for name, status, effective in (
+            ("now", "berlaku", date(2026, 1, 1)),
+            ("old", "arsip", date(2025, 1, 1)),
+            ("future", "berlaku", date(2027, 1, 1)),
+        )
+    ]
+    if isinstance(repo, MemoryRepository):
+        repo.chunks = chunks
+        repo.embeddings = {c.chunk_id: vector for c in chunks}
+    else:
+        for c in chunks:
+            admin_execute(
+                "INSERT INTO policy_chunks (chunk_id, document_id, title, section, version, effective_date, "
+                "content, status, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)",
+                (c.chunk_id, c.document_id, c.title, c.section, c.version, c.effective_date, c.content,
+                 c.status, to_pgvector(vector)),
+            )
+    try:
+        lexical = [c.chunk_id for c in repo.lexical_search(word, 10, TODAY)]
+        semantic = [c.chunk_id for c in repo.vector_search(vector, 10, TODAY) if c.chunk_id.startswith("TEST-K32")]
+        assert lexical == ["TEST-K32-now"]
+        assert semantic == ["TEST-K32-now"]
+    finally:
+        if not isinstance(repo, MemoryRepository):
+            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-K32-%%'")

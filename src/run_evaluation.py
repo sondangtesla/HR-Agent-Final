@@ -20,11 +20,14 @@ from typing import Any
 import httpx
 
 from .domain import earliest_start_with_notice, today_wib
+from .grounding import numbers_in, without_identifiers
 from .monitoring import p95
 
 ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = ROOT / "data" / "evaluation_cases.json"
 REGRESSION_PATH = ROOT / "evaluation" / "regression_cases.json"
+# K34: facts a correct answer must state, per case_id. Kept apart from the supplied cases file.
+REQUIRED_FACTS_PATH = ROOT / "evaluation" / "required_facts.json"
 OUTPUT_DIR = ROOT / "outputs"
 
 TARGETS = {"pass_rate": 0.8, "hard_gates": 1.0, "recall_at_3": 0.8, "citation_validity": 1.0}
@@ -83,6 +86,25 @@ def free_window(taken: list[tuple[date, date]], start_from: date, business_days:
 
 def _check(checks: list[dict[str, Any]], name: str, passed: bool, detail: str = "") -> None:
     checks.append({"check": name, "passed": bool(passed), "detail": detail})
+
+
+def missing_facts(answer: str, facts: list[str]) -> list[str]:
+    """Required facts the answer does not state (K34).
+
+    A number matches as a value, written in digits or words ("5" = "lima"). Text matches as a
+    whole word, case-insensitive. Citations and IDs do not count: "[HR-LEAVE-001]" never states "HR".
+    """
+    numbers = numbers_in(answer)
+    words = without_identifiers(answer).lower()
+    missing = []
+    for fact in facts:
+        if re.fullmatch(r"\d+(?:[.,]\d+)?", fact):
+            present = float(fact.replace(",", ".")) in numbers
+        else:
+            present = re.search(rf"\b{re.escape(fact.lower())}\b", words) is not None
+        if not present:
+            missing.append(fact)
+    return missing
 
 
 def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[date, date]],
@@ -178,6 +200,9 @@ def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[dat
     haystack = (body["answer"] + json.dumps(body["citations"]) + json.dumps(trace)).lower()
     for fact in case.get("forbidden_facts", []):
         _check(checks, f"forbidden fact absent: {fact}", fact.lower() not in haystack)
+    missing = missing_facts(body["answer"], case.get("required_facts", []))
+    for fact in case.get("required_facts", []):
+        _check(checks, f"required fact present: {fact}", fact not in missing, f"answer: {body['answer'][:120]}")
 
     return {
         **result,
@@ -217,6 +242,10 @@ def run(base_url: str, token: str, other_token: str | None = None,
         cases = json.loads(CASES_PATH.read_text(encoding="utf-8"))
         if REGRESSION_PATH.exists():
             cases += json.loads(REGRESSION_PATH.read_text(encoding="utf-8"))
+        if REQUIRED_FACTS_PATH.exists():
+            facts = json.loads(REQUIRED_FACTS_PATH.read_text(encoding="utf-8"))
+            for case in cases:
+                case.setdefault("required_facts", facts.get(case["case_id"], []))
 
     before = client.my_requests()
     taken = [(date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"]))

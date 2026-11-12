@@ -3,6 +3,7 @@ document_id: HR-PRIV-001
 title: Privasi Data Pegawai
 version: 2.0
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Akses minimum
 

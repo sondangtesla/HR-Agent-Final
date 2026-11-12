@@ -3,6 +3,7 @@ document_id: HR-LEAVE-003
 title: Kebijakan Cuti Orang Tua
 version: 1.2
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Kelayakan
 

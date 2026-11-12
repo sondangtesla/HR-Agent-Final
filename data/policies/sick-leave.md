@@ -3,6 +3,7 @@ document_id: HR-LEAVE-002
 title: Kebijakan Cuti Sakit
 version: 1.4
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Pemberitahuan
 

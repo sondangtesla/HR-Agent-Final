@@ -1,0 +1,9 @@
+{
+  "policy-annual-001": ["12"],
+  "policy-carryover-002": ["5"],
+  "policy-sick-003": ["2"],
+  "policy-remote-004": ["2"],
+  "policy-probation-005": ["manajer", "HR"],
+  "conflict-014": ["HR"],
+  "parental-015": ["HR"]
+}

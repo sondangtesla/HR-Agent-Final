@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from psycopg.conninfo import make_conninfo
 from pydantic import Field, field_validator
@@ -30,6 +31,9 @@ class Settings(BaseSettings):
     model_timeout_seconds: float = Field(default=30.0, ge=1, le=120)
     proposal_ttl_minutes: int = Field(default=15, ge=1, le=60)
     retrieval_cache_ttl_seconds: int = Field(default=900, ge=0, le=86400)
+    # K34: "enforce" abstains when an answer states a number no evidence of the run contains;
+    # "shadow" only records it in the trace (to measure false alarms before enforcing).
+    answer_number_check: Literal["enforce", "shadow"] = "enforce"
     input_cost_per_1m: float | None = Field(default=None, ge=0)
     output_cost_per_1m: float | None = Field(default=None, ge=0)
 

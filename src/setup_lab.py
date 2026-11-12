@@ -139,11 +139,16 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
     version         TEXT NOT NULL,
     effective_date  DATE NOT NULL,
     content         TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'berlaku' CHECK (status IN ('berlaku', 'arsip')),
     embedding       vector({{dimensions}}),
     search          tsvector GENERATED ALWAYS AS (
                         to_tsvector('simple', title || ' ' || section || ' ' || content)
                     ) STORED
 );
+
+-- K32: databases created before the status column get it here; the next seed sets the real value.
+ALTER TABLE policy_chunks
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'berlaku' CHECK (status IN ('berlaku', 'arsip'));
 
 CREATE INDEX IF NOT EXISTS policy_chunks_search_idx
     ON policy_chunks USING GIN (search);
@@ -183,7 +188,7 @@ def create_schema(conn: psycopg.Connection, embedding_dimensions: int) -> None:
     conn.execute(SCHEMA_SQL.format(dimensions=dimensions))
 
 
-FRONT_MATTER_KEYS = ("document_id", "title", "version", "effective_date")
+FRONT_MATTER_KEYS = ("document_id", "title", "version", "effective_date", "status")
 
 
 def slugify(text: str) -> str:
@@ -279,9 +284,10 @@ def chunk_policy(path: Path) -> list[dict[str, str]]:
             "section": section,
             "version": meta["version"],
             "effective_date": meta["effective_date"],
+            "status": meta["status"],
             "content": "\n".join(content_lines).strip(),
         }
-        PolicyChunk.model_validate(chunk)  # fails loudly on a bad date or empty field
+        PolicyChunk.model_validate(chunk)  # fails loudly on a bad date, a bad status, or an empty field
         if not chunk["content"]:
             raise ValueError(f"{path.name}: section {section!r} is empty")
         chunks.append(chunk)
@@ -364,27 +370,44 @@ def seed_historical_requests(conn: psycopg.Connection, requests: list[dict[str, 
         )
 
 
+def load_policy_chunks(policy_dir: Path | None = None) -> list[dict[str, str]]:
+    """Every chunk of every policy file, in a stable order.
+
+    K32: two files may never produce the same chunk_id. An archived version kept next to the
+    current one with the same document_id would otherwise overwrite it in the upsert, silently.
+    An archived version needs its own document_id.
+    """
+    chunks: list[dict[str, str]] = []
+    seen: dict[str, str] = {}
+    for path in sorted((policy_dir or DATA_DIR / "policies").glob("*.md")):
+        for chunk in chunk_policy(path):
+            if chunk["chunk_id"] in seen:
+                raise ValueError(
+                    f"{path.name}: {chunk['chunk_id']} is also in {seen[chunk['chunk_id']]}; "
+                    "an archived version needs its own document_id"
+                )
+            seen[chunk["chunk_id"]] = path.name
+            chunks.append(chunk)
+    return chunks
+
+
 def seed_policies(conn: psycopg.Connection) -> None:
     """Make policy_chunks match data/policies exactly.
 
-    - New or changed sections are upserted.
+    - New or changed sections are upserted, including their status (K32).
     - A section whose content changed loses its embedding (set to NULL), so it is re-embedded
       instead of answering with a vector of the old text.
     - Sections that no longer exist in the files are deleted.
     """
-    chunks = [
-        chunk
-        for path in sorted((DATA_DIR / "policies").glob("*.md"))
-        for chunk in chunk_policy(path)
-    ]
+    chunks = load_policy_chunks()
     for chunk in chunks:
         conn.execute(
             """
             INSERT INTO policy_chunks (
-                chunk_id, document_id, title, section, version, effective_date, content
+                chunk_id, document_id, title, section, version, effective_date, content, status
             )
             VALUES (%(chunk_id)s, %(document_id)s, %(title)s, %(section)s,
-                    %(version)s, %(effective_date)s, %(content)s)
+                    %(version)s, %(effective_date)s, %(content)s, %(status)s)
             ON CONFLICT (chunk_id) DO UPDATE SET
                 document_id = EXCLUDED.document_id,
                 title = EXCLUDED.title,
@@ -392,6 +415,7 @@ def seed_policies(conn: psycopg.Connection) -> None:
                 version = EXCLUDED.version,
                 effective_date = EXCLUDED.effective_date,
                 content = EXCLUDED.content,
+                status = EXCLUDED.status,
                 embedding = CASE
                     WHEN policy_chunks.content IS DISTINCT FROM EXCLUDED.content
                       OR policy_chunks.title IS DISTINCT FROM EXCLUDED.title

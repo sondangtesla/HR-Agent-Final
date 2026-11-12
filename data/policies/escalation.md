@@ -3,6 +3,7 @@ document_id: HR-OPS-001
 title: Eskalasi dan Pengecualian HR
 version: 1.0
 effective_date: 2026-01-01
+status: berlaku
 ---
 ## Kapan membuat tiket
 

@@ -35,6 +35,11 @@ Catatan keputusan teknis, alasannya, dan temuan yang memicunya. File ini menjadi
 | K27 | Proposal cuti ditampilkan sebagai ringkasan, bukan JSON | **Diputuskan** | 2026-11-10 |
 | K28 | Permintaan cuti bertanggal wajib lewat tool | **Diputuskan** | 2026-11-10 |
 | K29 | Dockerfile dan uji dari checkout bersih | **Diputuskan** | 2026-11-10 |
+| K30 | Agent loop dijalankan LangChain `create_agent` | **Diputuskan** | 2026-11-11 |
+| K31 | UI mengirim `conversation_id` per sesi browser | **Diputuskan** | 2026-11-11 |
+| K32 | Retrieval hanya membaca kebijakan yang berlaku | **Diputuskan** | 2026-11-11 |
+| K33 | Redaction medis diperluas tanpa menelan permintaan | **Diputuskan** | 2026-11-11 |
+| K34 | Angka di jawaban wajib berasal dari bukti run | **Diputuskan** | 2026-11-11 |
 
 Status yang dipakai:
 
@@ -794,6 +799,138 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 **Bukti (10 Nov 2026):** salinan berisi hanya file yang terlihat git (tanpa `.env`, `.venv`, cache), `.env` dibuat dari `.env.example`, project name `p2m2_cleancheck`, port host diganti karena stack lain sedang berjalan. Urutan `docker-delivery.md`: build tanpa API key (variabel key tidak ada di image) → `postgres`/`redis` healthy → seed (15 chunk ter-embed) → `api`/`streamlit` up → `pytest -m "not live"` di container **255 passed**. `whoami` = `appuser` di kedua container. `/healthz` ok, `/readyz` `ready` (4 cek ok), `/openapi.json` memuat semua path, Streamlit HTTP 200. Di Streamlit: jatah cuti dijawab dengan `[HR-LEAVE-001]` dan trace, saldo Alya 8, konfirmasi menghasilkan `pending_manager_review`. Live test di container lulus, report diekspor dengan `docker compose cp`. Stack uji lalu dihapus beserta volume dan image-nya.
 
 **Risiko:** Ini salinan working tree, belum clone dari commit. Setelah di-commit, uji sekali lagi dari `git clone` baru sebelum pengumpulan (task "Uji akhir dari checkout bersih").
+
+## K30 — Agent loop dijalankan LangChain `create_agent`
+
+**Status:** Diputuskan (11 Nov 2026)
+
+**Temuan:** Loop manual di `src/agent.py` (K20) menulis sendiri apa yang disediakan framework: memanggil model, menjalankan tool, mengembalikan hasil, mengulang. Tujuannya pindah ke LangChain (`langchain` 1.4.10, `langgraph` 1.2.20) tanpa melepas satu pun jaminan K19–K25.
+
+**Bukti dari source LangChain** (dibaca di `.venv`, bukan dari ingatan):
+
+- `create_agent` memasang `recursion_limit` 9.999 (`langchain/agents/factory.py:1899`). Tanpa middleware pembatas, loop praktis tidak terbatas.
+- `ModelCallLimitMiddleware` dengan `exit_behavior="end"` (bawaan) menulis `AIMessage("Model call limits exceeded: run limit (4/4)")`. Kode kita akan menganggapnya jawaban model.
+- `@tool` dengan type hint memvalidasi argumen lewat Pydantic dan **membuang diam-diam** argumen yang tidak dikenal. Eksperimen: `employee_id` sisipan hilang tanpa error, padahal K19 menolaknya.
+- Banyak tool call dalam satu giliran dijalankan LangGraph secara paralel di thread pool, kecuali `max_concurrency=1`.
+
+**Opsi:**
+
+1. `ChatOpenAI` langsung. Test mentor `tests/test_agent_reliability.py` memasukkan provider palsu lewat `respond() -> ModelTurn`, jadi test itu harus ditulis ulang.
+2. Adapter `BaseChatModel` yang membungkus `ModelProvider`. Test mentor tetap hijau. `store=False`, `safety_identifier`, encrypted reasoning, dan strict schema tetap lewat `OpenAIProvider`.
+
+**Keputusan:** opsi 2.
+
+- `src/lc_model.py`: `ProviderChatModel` hanya menerjemahkan pesan LangChain ⇄ item Responses API. `bind_tools` memakai strict schema `TOOL_SCHEMAS`, bukan schema buatan LangChain.
+- `src/lc_agent.py`: tool LangChain memakai `args_schema` berupa JSON schema dict. Argumen model diteruskan utuh ke `ToolExecutor`, sehingga keempat gerbang K19 tetap berlaku. Identitas, scope, dan penampung telemetri ada di `AgentRun`, yang dikirim sebagai `context` (`ToolRuntime.context`) dan tidak pernah terlihat oleh model.
+- Batas: `ModelCallLimitMiddleware(run_limit=4, exit_behavior="error")` → `turn_limit`. `ToolCallLimitMiddleware(run_limit=6)` mode `"continue"`: call ke-7 dan seterusnya mendapat pesan error, model boleh tetap menjawab, dan trace mencatat `tool_limit_reached`. Budget 30 detik dan telemetri model ada di `RunBudgetMiddleware`.
+- `max_concurrency=1`: tool berjalan satu per satu sesuai urutan model.
+- `tracing_context(enabled=False)`: prompt tidak pernah terkirim ke LangSmith walaupun environment menyalakan tracing (K23).
+
+**Perubahan perilaku:** sebelumnya, 7 tool call dalam satu run berarti 6 dijalankan lalu run berhenti dan abstain (`tool_limit`). Sekarang 6 dijalankan, yang ke-7 ditolak, dan model mendapat satu giliran untuk menjawab. Jawabannya tetap lewat validasi sitasi. `stop_reason` mencatat alasan run selesai, sedangkan `tool_limit_reached` mencatat bahwa batas tercapai. `ERROR_STOP_REASONS` di `src/monitoring.py` masih memuat `tool_limit` untuk trace lama.
+
+**Bukti:** test agent, reliability (mentor), privacy, dan ticket confirmation lulus. Ditambah 3 test baru di `tests/test_agent.py`: argumen sisipan tetap ditolak, nama tool karangan tetap tercatat, dan pesan batas LangChain tidak pernah sampai ke user. Test terakhir ini **gagal** kalau mode diganti ke `"end"` (dicek dengan mengubah kodenya sementara).
+
+**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`, dari working tree):** image ter-build dengan 3 dependency baru. Seluruh suite lulus di container (308 test, 0 di-skip). Evaluasi live hasilnya GO 16/16 (hard gates, recall@3, dan validitas sitasi 100%), dan tool yang dipilih di ke-16 kasus identik dengan evaluasi 10 Nov (loop manual). Payload ke provider direkam dengan provider palsu: tools dan input sama persis dengan loop manual, jadi migrasi tidak menambah token. Kenaikan token input 27.336 → 30.302 (tepat +111 per panggilan model) seluruhnya berasal dari kalimat aturan angka K34.
+
+**Risiko (K30):** `requirements.txt` bertambah 3 dependency, sehingga image Docker harus di-build ulang. Build dan evaluasi live sudah diulang dari working tree; uji dari `git clone` bersih (K29) masih harus diulang setelah commit. Graph dikompilasi sekali per `AgentService` dan dipakai bersama oleh semua request. Data per-run hanya boleh disimpan di `AgentRun`, tidak di atribut middleware.
+
+## K31 — UI mengirim `conversation_id` per sesi browser
+
+**Status:** Diputuskan (11 Nov 2026)
+
+**Temuan:** API sudah memisahkan memory dan draf tiket per `(employee_id dari token, conversation_id)` (K25), tetapi `app.py` tidak pernah mengirim `conversation_id`. Akibatnya, semua chat satu persona berbagi satu wadah `default`. Dua tab browser dengan persona yang sama berbagi draf tiket, sehingga "ya" di tab kedua bisa mengirim draf yang dibuat di tab pertama. Topik lama juga ikut terbawa sebagai history ke topik baru.
+
+**Keputusan:**
+
+- `ui_contract.current_conversation_id(state)`: satu ID acak (`uuid4().hex`) per sesi Streamlit, yaitu per tab browser. Dikirim di body chat bersama `message`.
+- Tombol "Percakapan baru" di sidebar (`start_new_conversation`): pesan berikutnya memakai ID baru. Memory lama dan draf tiket yang belum dikirim tertinggal di ID lama dan kedaluwarsa di sana (15 menit).
+- Ganti persona juga memulai percakapan baru (`select_persona` ikut menghapus `conversation_id`).
+
+**Kenapa tidak melanggar [lab.md:33](lab.md:33):** sama dengan K27. Endpoint, cara autentikasi, dan alur konfirmasi tidak berubah. `conversation_id` adalah field opsional yang sudah ada di kontrak API (`ChatRequest`, maksimal 100 karakter). `tests/test_supplied_ui.py` tetap lulus tanpa diubah. ID dihapus (bukan dibuat ulang) saat ganti persona, persis karena test itu mewajibkan state hanya berisi `active_employee_id`.
+
+**Bukti:** `tests/test_ui_conversation.py` menjalankan `app.py` sungguhan dengan Streamlit `AppTest`. Panggilan API disadap: dua pesan di sesi yang sama membawa ID yang sama, dan setelah "Percakapan baru" ID-nya berbeda. Test ini gagal kalau `app.py` mengirim `conversation_id: None` (dicek dengan mengubah kodenya sementara).
+
+**Bukti live (11 Nov 2026, UI asli di browser, stack Docker):** dua chat di sesi yang sama menulis ke satu key Redis `conv:v2:EMP-001:<hash>:history`, dan model mengingat pertanyaan sebelumnya. Setelah "Percakapan baru", muncul key baru, dan model menjawab bahwa belum ada pertanyaan sebelumnya.
+
+**Risiko:** keamanan antar-user tidak bergantung pada ID ini. Bagian employee pada scope tetap diambil dari token, sehingga ID yang ditebak atau dikarang tidak bisa membuka memory pegawai lain.
+
+## K32 — Retrieval hanya membaca kebijakan yang berlaku
+
+**Status:** Diputuskan (11 Nov 2026)
+
+**Temuan:** Query lexical dan vector tidak memfilter metadata apa pun. Korpus saat ini aman karena hanya ada satu versi per dokumen, tetapi begitu ada dokumen arsip atau kebijakan yang baru berlaku di masa depan, dokumen itu bisa masuk top 3 dan dikutip sebagai jawaban. Lab bootcamp week 2 day 2 (kasus 1) mengajarkan hal yang sama: saring status **sebelum** retrieval, karena skor hanya mengurutkan dokumen yang memang boleh dipakai.
+
+**Keputusan:**
+
+- Front matter wajib memuat `status: berlaku | arsip`. Ketujuh dokumen diberi `status: berlaku`. Status yang tidak ada atau tidak dikenal membuat seed gagal keras, mengikuti pola K14 (metadata wajib).
+- Kolom `policy_chunks.status` dengan `CHECK (status IN ('berlaku', 'arsip'))`. Database lama mendapat kolom ini lewat `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, dan seed berikutnya mengisi nilai sebenarnya.
+- `lexical_search` dan `vector_search` memfilter `status = 'berlaku' AND effective_date <= as_of` di `WHERE`, sehingga filter berjalan sebelum `ORDER BY` dan `LIMIT`. Dokumen yang tidak berlaku tidak pernah memakan slot top-k. Parameter `as_of` **wajib** di repository, jadi tidak ada pemanggil yang bisa lupa memfilter.
+- `as_of` diambil dari `today_factory()` milik tool (WIB), jam yang sama dengan aturan cuti. `RetrievalService` memakai `today_wib()` sebagai default.
+- Cache key memuat tanggal, sehingga kebijakan yang mulai berlaku hari ini tidak tertutup hasil cache kemarin.
+- Seed menolak dua file yang menghasilkan `chunk_id` sama. Tanpa penjaga ini, salinan arsip dengan `document_id` yang sama akan menimpa versi yang berlaku secara diam-diam saat upsert. Arsip harus punya `document_id` sendiri, seperti `PEMBATALAN-ARSIP` di lab bootcamp.
+
+**Opsi yang tidak dipilih:**
+
+- `chunk_id` memuat versi, supaya beberapa versi dokumen yang sama bisa disimpan. Ini mengubah format ID K14 dan memaksa semua chunk di-embed ulang. Ditunda sampai ada kebutuhan nyata.
+- `status` opsional dengan default `berlaku`. Lebih toleran terhadap dokumen lama, tetapi dokumen tanpa status diam-diam dianggap berlaku.
+
+**Bukti:** `tests/test_policy_status.py` (7 test): status wajib, status tidak dikenal ditolak, salinan arsip tidak bisa menimpa, dokumen arsip dan dokumen masa depan tidak pernah di-retrieve walaupun teks dan vektornya paling cocok, dokumen mulai muncul tepat pada `effective_date`, dan cache dipisah per hari. `tests/test_repository_contract.py::test_search_skips_archived_and_future_policies` menjalankan hal yang sama untuk memory dan PostgreSQL. Dengan filter dimatikan, 3 test gagal (dicek dengan mengubah kodenya sementara).
+
+**Bukti PostgreSQL (11 Nov 2026, stack Docker terpisah `p2m2_verify`):** varian `[postgres]` lolos, dan sisa baris uji di `policy_chunks` adalah 0. Seluruh suite di container: 308 lulus, 0 di-skip.
+
+**Jalur upgrade database lama** (disimulasikan dengan `ALTER TABLE policy_chunks DROP COLUMN status`):
+
+- **Sebelum seed ulang:** `/readyz` tetap menjawab 200 `ready`, karena cek index hanya menghitung baris dan embedding. Kedua query pencarian gagal dengan `UndefinedColumn`. Error itu ditangkap `ToolExecutor` (`src/tools.py:148`), jadi user **tidak** melihat 503. Hasilnya HTTP 200, tool `search_hr_policy` berstatus `error`, dan model meminta maaf tanpa sitasi. Outcome tetap tercatat `answered`, karena aturan "tanpa sitasi → abstain" hanya berlaku kalau search berhasil (`searched=True`). Satu-satunya sinyal adalah `error_rate` di monitoring, yang menghitung run dengan tool error.
+- **Setelah `python -m src.setup_lab`:** kolom kembali dengan CHECK constraint, ke-15 chunk berstatus `berlaku`, dan `embedded_now=0`, jadi tidak ada biaya embedding. Pertanyaan yang sama dijawab "12 hari kerja" dengan sitasi `HR-LEAVE-001`.
+
+**Risiko:** kode API membaca kolom `status`, jadi database lama **harus di-seed ulang** (`python -m src.setup_lab`, atau langkah seed di `docker-delivery.md`) sebelum API dipakai. `/readyz` tidak mendeteksi schema lama, dan outcome tidak menandai kegagalannya. `brief.md` (dokumen mentor) tidak diubah; field `status` didokumentasikan di sini.
+
+## K33 — Redaction medis diperluas tanpa menelan permintaan
+
+**Status:** Diputuskan (11 Nov 2026)
+
+**Temuan (diuji sebelum diperbaiki):**
+
+1. **Bocor.** "Saya didiagnosa vertigo", "Saya menderita GERD", "Saya sakit kepala parah", dan "Saya mengidap gangguan kecemasan" terkirim utuh ke provider. Pola `\bdiagnosa` tidak cocok dengan kata "**di**diagnosa", karena tidak ada batas kata di tengah kata. "menderita" dan "mengidap" bukan pemicu, dan kondisi-kondisi itu tidak ada di daftar.
+2. **Terlalu rakus.** "Saya didiagnosis hipertensi, jadi mau cuti 2026-11-12" menjadi "Saya didiagnosis [MEDIS]." karena masking berjalan sampai titik. Permintaan cuti dan tanggalnya ikut hilang, sehingga agent tidak bisa memprosesnya.
+
+**Kebijakan yang mengikat:** HR-LEAVE-002 ("Asisten tidak boleh meminta atau menyimpan diagnosis") dan HR-PRIV-001 ("rincian medis harus disamarkan"). Asisten tidak pernah butuh nama penyakit untuk menjawab atau menyiapkan cuti, jadi menyamarkan lebih banyak tidak mengurangi fungsi, selama "cuti sakit", tanggal, dan permintaannya tetap utuh.
+
+**Keputusan:** tiga lapis deterministik di `redact()` (`src/security.py`). Fungsi ini dipakai untuk pesan ke provider, output guard, error di trace, ringkasan tiket, dan alasan cuti, sehingga satu perbaikan melindungi kelima jalur.
+
+- Pemicu ditambah `didiagnosa`, `menderita`, `mengidap`, dan `terjangkit`. Masking berhenti di `. ; ,`, baris baru, atau kata yang memulai permintaan (`jadi`, `sehingga`, `maka`, `mohon`, `tolong`, `mau`, `ingin`, `minta`, `dan saya`).
+- Daftar kondisi ditambah 30 nama yang tidak ambigu (vertigo, GERD, maag, cacar, kista, gangguan kecemasan, dan lain-lain).
+- Gejala per bagian tubuh: `sakit|nyeri|radang|infeksi` + `kepala|perut|tenggorokan|...`. Kata "sakit" sendirian tetap utuh, sehingga "cuti sakit" aman.
+- Sengaja **tidak** dijadikan pemicu: `kena` dan `terkena` ("terkena sanksi"), `gangguan` sendirian ("gangguan aplikasi" adalah kategori tiket teknis), serta kata kehamilan (konteks cuti melahirkan).
+
+**Opsi yang tidak dipilih:** library NER/PII, karena tidak ada model medis bahasa Indonesia yang andal untuk dipakai offline dan akan menambah dependency berat. Redaction berbasis LLM juga ditolak, karena justru mengirim teks mentah ke pihak luar, yang bertentangan dengan tujuannya.
+
+**Bukti:** 21 kasus baru di `tests/test_security.py`, dua arah: harus tersamar (7), permintaan harus selamat (5), dan teks HR harus utuh (9). Dengan `redact()` lama, 8 di antaranya gagal. Ke-16 input evaluasi resmi (`data/evaluation_cases.json`, `evaluation/regression_cases.json`) menghasilkan teks yang **sama persis** sebelum dan sesudah perubahan, sehingga hasil evaluasi tidak terpengaruh.
+
+**Risiko sisa:** daftar tidak pernah lengkap. Kondisi yang tidak terdaftar dan tidak diawali kata pemicu (misalnya "vertigo" yang ditulis dengan salah eja) tetap lolos. Kondisi kedua setelah koma ("didiagnosis asma, X") hanya tersamar kalau X ada di daftar. Dicatat sebagai R-010 di `templates/risk-register.csv`.
+
+## K34 — Angka di jawaban wajib berasal dari bukti run
+
+**Status:** Diputuskan (11 Nov 2026)
+
+**Temuan:** Validasi sitasi (K20) membuktikan **dokumen mana** yang dipakai, bukan **apa isinya**. "Cuti tahunan 15 hari [HR-LEAVE-001]" lolos validasi sitasi, padahal dokumennya menyebut 12. Evaluator hanya memeriksa fakta **terlarang** (`forbidden_facts`), tidak memeriksa fakta yang wajib ada. Untuk HR, kesalahan paling merugikan ada di angka: hari, tanggal, dan batas.
+
+**Keputusan (dua lapis):**
+
+1. **Runtime, deterministik** (`src/grounding.py`). Setiap angka yang ditulis model harus muncul di bukti run itu sendiri: pesan user, memory singkat, tanggal hari ini, atau output tool (teks kebijakan, saldo, proposal). Angka yang tidak muncul di mana pun berarti dikarang atau dihitung sendiri oleh model, padahal HR-LEAVE-001 melarangnya ("tidak boleh diganti dengan perhitungan model"). Outcome `answered` lalu menjadi `abstained` (`stop_reason="unsupported_number"`). Sitasi yang valid tetap ditampilkan, supaya user bisa membaca angka yang benar di sumbernya. Trace mencatat `unsupported_numbers` di semua outcome.
+   - Angka dibaca sebagai nilai: "tiga" = "3" = "03", dan "dua belas" = 12. Kebijakan menulis sebagian angka dengan kata ("tiga hari kerja", "lima hari"), sedangkan model bisa menulisnya dengan digit.
+   - Yang bukan fakta diabaikan: ID (`HR-LEAVE-001`, `EMP-001`, `LR-...`), penomoran daftar jawaban ("1. ..."), dan "satu-satunya". Versi "2.1" dibaca sebagai satu angka, sehingga tidak "membenarkan" angka 2 atau 1.
+   - System prompt aturan 1 ditambah: "Tulis angka persis seperti di dokumen atau hasil tool; jangan menghitung angka baru."
+   - Setting `ANSWER_NUMBER_CHECK`: `enforce` (bawaan) atau `shadow` (hanya mencatat di trace). `shadow` disediakan untuk mengukur alarm palsu dengan model live sebelum penegakan, atau sebagai jalan mundur tanpa mengubah kode.
+2. **Evaluator.** `evaluation/required_facts.json` berisi fakta yang wajib disebut jawaban per kasus (misalnya `policy-annual-001` harus menyebut 12). Disimpan terpisah dari `data/evaluation_cases.json` milik mentor. Angka dicocokkan sebagai nilai (digit atau kata), teks dicocokkan sebagai kata utuh. Sitasi tidak dihitung: "[HR-OPS-001]" tidak membuktikan fakta "HR".
+
+**Opsi yang tidak dipilih:** LLM-as-judge untuk faithfulness, karena menambah biaya dan latency per evaluasi dan membutuhkan API key. Masih bisa ditambahkan sebagai lapis ketiga, hanya di evaluasi dan bukan di runtime.
+
+**Bukti:** `tests/test_grounding.py` (10 test: normalisasi angka dan pengabaian ID). `tests/test_agent.py`: angka salah di balik sitasi valid di-abstain dan sitasinya tetap tampil; angka dari dokumen, tool saldo, dan pesan user diterima; mode `shadow` hanya mencatat. `tests/test_evaluation.py`: fakta wajib yang hilang membuat kasus gagal. Dengan penegakan dimatikan, test angka-salah gagal (dicek dengan mengubah kodenya sementara). Ke-104 test agent, API, dan aksi yang sudah ada tetap lulus dengan penegakan aktif.
+
+**Bukti live (11 Nov 2026, stack Docker `p2m2_verify`):** dua run evaluasi menghasilkan 33 trace. Tidak ada satu pun yang berisi `unsupported_numbers`, tidak ada abstain baru, dan hasilnya GO 16/16. Biaya: kalimat aturan di system prompt menambah 111 token input per panggilan model (+11% di evaluasi).
+
+**Risiko:** sampelnya kecil (16 pertanyaan berbeda). Alarm palsu yang masih mungkin terjadi adalah model menulis angka turunan atau format tanggal lain ("31/03"). Akibatnya, kasus yang seharusnya `answered` menjadi `abstained`. Kalau itu muncul, periksa `unsupported_numbers` di trace, lalu perbaiki normalisasi atau gunakan `shadow` sementara. Angka kecil yang muncul di tanggal berlaku (1 dari "2026-01-01") tetap bisa "membenarkan" jawaban yang salah dengan angka yang sama. Pemeriksaan ini menangkap angka yang **berbeda**, bukan semua kesalahan.
 
 ## Temuan kecil
 

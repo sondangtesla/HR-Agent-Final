@@ -7,7 +7,7 @@ from pathlib import Path
 import httpx
 import streamlit as st
 
-from ui_contract import API_PATHS, load_personas, select_persona
+from ui_contract import API_PATHS, current_conversation_id, load_personas, select_persona, start_new_conversation
 from ui_format import confirmation_message, proposal_markdown
 
 
@@ -32,6 +32,11 @@ personas = load_personas(Path(__file__).with_name("demo_personas.json"))
 persona = st.sidebar.selectbox("Persona demo", personas, format_func=lambda item: item["label"])
 select_persona(st.session_state, persona)
 st.sidebar.caption(persona["scenario"])
+if st.sidebar.button(
+    "Percakapan baru",
+    help="Mulai percakapan baru: memori singkat dan draf tiket yang belum dikirim tidak ikut terbawa.",
+):
+    start_new_conversation(st.session_state)
 token = persona["demo_token"]
 
 chat_tab, leave_tab, monitor_tab = st.tabs(["Percakapan", "Permintaan Cuti", "Monitoring"])
@@ -39,7 +44,10 @@ chat_tab, leave_tab, monitor_tab = st.tabs(["Percakapan", "Permintaan Cuti", "Mo
 with chat_tab:
     message = st.text_area("Pertanyaan atau permintaan", placeholder="Berapa saldo cuti saya?")
     if st.button("Kirim", type="primary", disabled=not message.strip()):
-        result = request("POST", API_PATHS["chat"], token, json={"message": message})
+        result = request(
+            "POST", API_PATHS["chat"], token,
+            json={"message": message, "conversation_id": current_conversation_id(st.session_state)},
+        )
         if result:
             st.session_state["last_chat"] = result
     result = st.session_state.get("last_chat")

@@ -25,7 +25,13 @@ from .text import tokenize
 logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
-CHUNK_COLUMNS = "chunk_id, document_id, title, section, version, effective_date, content"
+CHUNK_COLUMNS = "chunk_id, document_id, title, section, version, effective_date, content, status"
+# K32: retrieval only ever sees policies in force: this status, and effective_date on or before the day asked.
+ACTIVE_POLICY_STATUS = "berlaku"
+
+
+def is_retrievable(chunk: PolicyChunk, as_of: date) -> bool:
+    return chunk.status == ACTIVE_POLICY_STATUS and chunk.effective_date <= as_of
 REQUEST_COLUMNS = "request_id, leave_type, start_date, end_date, business_days, status, created_at"
 PROPOSAL_COLUMNS = (
     "proposal_id, action_type, leave_type, start_date, end_date, business_days, "
@@ -71,8 +77,9 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 class Repository(Protocol):
     def health(self) -> bool: ...
     def authenticate(self, token: str) -> AuthContext | None: ...
-    def lexical_search(self, query: str, limit: int) -> list[PolicyChunk]: ...
-    def vector_search(self, embedding: list[float], limit: int) -> list[PolicyChunk]: ...
+    # as_of is required: a search can never skip the "in force on this day" filter by accident.
+    def lexical_search(self, query: str, limit: int, as_of: date) -> list[PolicyChunk]: ...
+    def vector_search(self, embedding: list[float], limit: int, as_of: date) -> list[PolicyChunk]: ...
     def get_balances(self, employee_id: str) -> list[LeaveBalance]: ...
     def get_pending_days(self, employee_id: str) -> dict[str, int]: ...
     def has_overlap(self, employee_id: str, start: date, end: date) -> bool: ...
@@ -165,11 +172,13 @@ class MemoryRepository:
         )
         return ticket_id
 
-    def lexical_search(self, query: str, limit: int) -> list[PolicyChunk]:
-        """Same idea as the PostgreSQL version: OR over query words, ranked by matches."""
+    def lexical_search(self, query: str, limit: int, as_of: date) -> list[PolicyChunk]:
+        """Same idea as the PostgreSQL version: filter first, then OR over query words, ranked by matches."""
         terms = tokenize(query)
         scored = []
         for chunk in self.chunks:
+            if not is_retrievable(chunk, as_of):
+                continue
             words = set(tokenize(f"{chunk.title} {chunk.section} {chunk.content}"))
             matches = sum(term in words for term in terms)
             if matches:
@@ -177,11 +186,11 @@ class MemoryRepository:
         scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
         return [chunk.model_copy(update={"score": float(m)}) for m, chunk in scored[:limit]]
 
-    def vector_search(self, embedding: list[float], limit: int) -> list[PolicyChunk]:
+    def vector_search(self, embedding: list[float], limit: int, as_of: date) -> list[PolicyChunk]:
         scored = [
             (cosine_similarity(embedding, self.embeddings[chunk.chunk_id]), chunk)
             for chunk in self.chunks
-            if chunk.chunk_id in self.embeddings
+            if chunk.chunk_id in self.embeddings and is_retrievable(chunk, as_of)
         ]
         scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
         return [chunk.model_copy(update={"score": s}) for s, chunk in scored[:limit]]
@@ -318,12 +327,13 @@ class PostgresRepository:
             ).fetchall()
         return [LeaveBalance(**row) for row in rows]
 
-    def lexical_search(self, query: str, limit: int) -> list[PolicyChunk]:
-        """Full-text search with OR between words.
+    def lexical_search(self, query: str, limit: int, as_of: date) -> list[PolicyChunk]:
+        """Full-text search with OR between words, over policies in force on `as_of` only.
 
         websearch_to_tsquery joins words with AND, so "jatah cuti tahunan" finds nothing
         because no policy contains "jatah". OR keeps the chunks that match some words,
-        and ts_rank puts the ones matching more words first.
+        and ts_rank puts the ones matching more words first. The status/date filter sits in
+        WHERE, so it runs before ORDER BY and LIMIT: an archived chunk can never take a slot (K32).
         """
         terms = tokenize(query)
         if not terms:
@@ -335,15 +345,15 @@ class PostgresRepository:
                 f"""
                 SELECT {CHUNK_COLUMNS}, ts_rank(search, q) AS score
                 FROM policy_chunks, to_tsquery('simple', %s) AS q
-                WHERE search @@ q
+                WHERE search @@ q AND status = %s AND effective_date <= %s
                 ORDER BY score DESC, chunk_id
                 LIMIT %s
                 """,
-                (tsquery, limit),
+                (tsquery, ACTIVE_POLICY_STATUS, as_of, limit),
             ).fetchall()
         return [PolicyChunk(**row) for row in rows]
 
-    def vector_search(self, embedding: list[float], limit: int) -> list[PolicyChunk]:
+    def vector_search(self, embedding: list[float], limit: int, as_of: date) -> list[PolicyChunk]:
         if len(embedding) != self.embedding_dimensions:
             raise ValueError(
                 f"query embedding has {len(embedding)} dimensions, expected {self.embedding_dimensions}"
@@ -354,11 +364,11 @@ class PostgresRepository:
                 f"""
                 SELECT {CHUNK_COLUMNS}, 1 - (embedding <=> %s::vector) AS score
                 FROM policy_chunks
-                WHERE embedding IS NOT NULL
+                WHERE embedding IS NOT NULL AND status = %s AND effective_date <= %s
                 ORDER BY embedding <=> %s::vector, chunk_id
                 LIMIT %s
                 """,
-                (vector, vector, limit),
+                (vector, ACTIVE_POLICY_STATUS, as_of, vector, limit),
             ).fetchall()
         return [PolicyChunk(**row) for row in rows]
 

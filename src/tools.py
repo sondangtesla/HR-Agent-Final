@@ -150,7 +150,8 @@ class ToolExecutor:
             return error("Layanan sedang bermasalah. Coba lagi nanti atau buat tiket HR.")
 
     def _search_hr_policy(self, args: SearchPolicyArgs, auth: AuthContext) -> ToolResult:
-        chunks = self.retrieval.search(args.query, args.top_k)
+        # Same clock as the leave rules, so "in force today" and "today" never disagree (K32).
+        chunks = self.retrieval.search(args.query, args.top_k, as_of=self.today_factory())
         return {
             "status": "ok",
             "note": UNTRUSTED_NOTE,

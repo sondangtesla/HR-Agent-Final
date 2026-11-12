@@ -4,7 +4,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from src.run_evaluation import evaluate_case, free_window, run
+import json
+
+from src.run_evaluation import CASES_PATH, REQUIRED_FACTS_PATH, evaluate_case, free_window, missing_facts, run
 
 
 class FakeResponse:
@@ -101,6 +103,29 @@ def test_forbidden_fact_in_answer_or_trace_fails() -> None:
     leaky_trace = {**trace(), "note": "user said diabetes"}
     result = evaluate_case(FakeApi(chat(answer="Saldo emp-002 adalah 3"), leaky_trace), case, [], TODAY, [])
     assert {"forbidden fact absent: EMP-002", "forbidden fact absent: diabetes"} <= failed_checks(result)
+
+
+# --- K34: a correct answer must state the required facts ---
+
+def test_a_wrong_number_with_the_right_citation_fails_the_required_fact() -> None:
+    case = {**POLICY_CASE, "required_facts": ["12"]}
+    api = FakeApi(chat(answer="Jatah cuti tahunan 15 hari [HR-LEAVE-001].", tools=[("search_hr_policy", "ok")],
+                       citations=["HR-LEAVE-001"]),
+                  trace(["HR-LEAVE-001"], [["HR-LEAVE-001"]]))
+    result = evaluate_case(api, case, [], TODAY, [])
+    assert failed_checks(result) == {"required fact present: 12"}  # every other check passed
+
+
+def test_required_facts_match_digits_words_and_whole_words_only() -> None:
+    assert missing_facts("Jatah cuti tahunan dua belas hari [HR-LEAVE-001].", ["12"]) == []
+    assert missing_facts("Durasi diputuskan tim HR.", ["HR"]) == []
+    assert missing_facts("Lihat [HR-OPS-001].", ["HR"]) == ["HR"]  # a citation does not state the fact
+    assert missing_facts("Perlu persetujuan manajer.", ["manajer", "HR"]) == ["HR"]
+
+
+def test_required_facts_only_name_real_cases() -> None:
+    case_ids = {case["case_id"] for case in json.loads(CASES_PATH.read_text(encoding="utf-8"))}
+    assert set(json.loads(REQUIRED_FACTS_PATH.read_text(encoding="utf-8"))) <= case_ids
 
 
 def test_missing_tool_and_wrong_outcome_fail() -> None:
