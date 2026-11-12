@@ -66,6 +66,7 @@ class AgentRun:
     search_rankings: list[list[str]] = field(default_factory=list)  # document IDs per search (recall@k)
     tool_outputs: list[str] = field(default_factory=list)  # what the model saw from tools (K34 evidence)
     searched: bool = False
+    search_failed: bool = False
     action_refused: bool = False
     proposal: ActionProposal | None = None
     ticket_draft: dict[str, str] | None = None
@@ -100,6 +101,8 @@ class ToolRunner:
             run.search_rankings.append([chunk["document_id"] for chunk in result["results"]])
             for chunk in result["results"]:
                 run.retrieved.setdefault(chunk["document_id"], []).append(chunk)
+        if name == "search_hr_policy" and result["status"] == "error":
+            run.search_failed = True
         if name == "create_hr_ticket" and result["status"] == "ok":
             run.ticket_draft = result["draft"]  # a later call replaces the stored draft too
         if name == "prepare_leave_request" and result["status"] != "ok":

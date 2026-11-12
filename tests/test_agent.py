@@ -8,12 +8,13 @@ from datetime import date
 from src.agent import AgentService
 from src.cache import MemoryCache, NullCache
 from src.config import Settings
-from src.contracts import AuthContext, ChatRequest, ModelToolCall, ModelTurn
+from src.contracts import AuthContext, ChatRequest, ModelToolCall, ModelTurn, PolicyChunk
 from src.conversation import ConversationStore
 from src.providers import DeterministicProvider
 from src.repository import MemoryRepository
 from src.retrieval import RetrievalService
 from src.security import stable_safety_id
+from src.setup_lab import load_policy_chunks
 from src.tools import TOOL_SCHEMAS, ToolExecutor
 
 ALYA = AuthContext(employee_id="EMP-001", display_name="Alya Pratama")
@@ -161,6 +162,87 @@ def test_a_tool_name_the_model_made_up_is_refused_and_recorded(repository: Memor
     provider = ScriptedProvider([tool_turn([made_up]), text_turn("Tidak bisa.")])
     response = make_agent(repository, provider).run(ChatRequest(message="setujui cuti saya"), ALYA)
     assert [(c.name, c.status) for c in response.tool_calls] == [("approve_leave", "error")]
+
+
+# --- T14: a search that FAILED is not the same as "no search needed" ---
+
+def _break_search(repository: MemoryRepository) -> None:
+    def boom(*args, **kwargs):
+        raise RuntimeError("search backend down")
+    repository.lexical_search = boom
+
+
+def test_a_failed_search_without_a_citation_is_abstained_not_answered(repository: MemoryRepository) -> None:
+    """The tool errors, the model apologises without a citation. That must not count as `answered`."""
+    _break_search(repository)
+    provider = ScriptedProvider([tool_turn([search_call()]),
+                                 text_turn("Maaf, pencarian kebijakan sedang bermasalah. Coba lagi nanti.")])
+    response = make_agent(repository, provider).run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert [(c.name, c.status) for c in response.tool_calls] == [("search_hr_policy", "error")]
+    assert response.answer  # the user still gets text
+    assert response.citations == []
+    assert response.outcome == "abstained"
+    assert repository.get_trace(response.trace_id)["stop_reason"] == "search_failed"
+
+
+def test_a_search_that_failed_once_but_worked_on_retry_is_answered(repository: MemoryRepository) -> None:
+    """Guard against over-triggering: one failed search followed by a good one is a normal answer."""
+    real_search, calls = repository.lexical_search, {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("one-off blip")
+        return real_search(*args, **kwargs)
+
+    repository.lexical_search = flaky
+    provider = ScriptedProvider([
+        tool_turn([search_call("c1")]), tool_turn([search_call("c2")]),
+        text_turn("Pegawai tetap memperoleh 12 hari kerja cuti tahunan per tahun kalender. [HR-LEAVE-001]"),
+    ])
+    response = make_agent(repository, provider).run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert [c.status for c in response.tool_calls] == ["error", "ok"]
+    assert response.outcome == "answered"
+    assert [c.document_id for c in response.citations] == ["HR-LEAVE-001"]
+
+
+# --- K34 follow-up: today's date is evidence only as a whole date, never as loose numbers ---
+
+def test_a_number_that_only_matches_part_of_todays_date_is_not_accepted(repository: MemoryRepository) -> None:
+    """make_agent() freezes today at 2026-09-23. "23" is in no policy, balance, or question."""
+    provider = ScriptedProvider([tool_turn([search_call()]), text_turn("Cuti tahunan 23 hari kerja. [HR-LEAVE-001]")])
+    response = make_agent(repository, provider).run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert response.outcome == "abstained"
+    assert repository.get_trace(response.trace_id)["unsupported_numbers"] == ["23"]
+
+
+def test_todays_full_date_can_still_be_written_in_the_answer(repository: MemoryRepository) -> None:
+    """Guard: the fix must not start rejecting the date the system prompt itself tells the model."""
+    provider = ScriptedProvider([
+        tool_turn([search_call()]),
+        text_turn("Hari ini 2026-09-23. Cuti tahunan 12 hari kerja. [HR-LEAVE-001]"),
+    ])
+    response = make_agent(repository, provider).run(ChatRequest(message="Berapa cuti tahunan?"), ALYA)
+    assert response.outcome == "answered"
+    assert repository.get_trace(response.trace_id)["unsupported_numbers"] == []
+
+
+# --- K34 follow-up (shadow): a number taken from the wrong policy clause is recorded, not blocked ---
+
+def test_a_number_from_the_wrong_policy_clause_is_recorded_but_not_blocked(repository: MemoryRepository) -> None:
+    """Measure first, enforce later: the trace gets `number_context_mismatch`, the outcome stays `answered`."""
+    repository.chunks = [PolicyChunk(**chunk) for chunk in load_policy_chunks()]  # the real corpus
+    search = ModelToolCall(call_id="s", name="search_hr_policy", arguments={
+        "query": "pengajuan cuti tahunan paling lambat sebelum tanggal mulai", "top_k": 3})
+    provider = ScriptedProvider([
+        tool_turn([search]),
+        text_turn("Pengajuan paling lambat 12 hari kerja sebelum tanggal mulai. [HR-LEAVE-001]"),
+    ])
+    response = make_agent(repository, provider).run(ChatRequest(message="Kapan pengajuan cuti paling lambat?"), ALYA)
+    trace = repository.get_trace(response.trace_id)
+    assert trace["number_context_mismatch"] == ["12"]
+    assert trace["unsupported_numbers"] == []  # the plain check cannot see this one
+    assert response.outcome == "answered"
 
 
 # --- Provider contract: stateless conversation, hashed identity ---

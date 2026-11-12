@@ -6,7 +6,9 @@ from pathlib import Path
 
 import json
 
-from src.run_evaluation import CASES_PATH, REQUIRED_FACTS_PATH, evaluate_case, free_window, missing_facts, run
+from src.run_evaluation import (
+    CASES_PATH, REGRESSION_PATH, REQUIRED_FACTS_PATH, evaluate_case, free_window, missing_facts, run,
+)
 
 
 class FakeResponse:
@@ -124,8 +126,18 @@ def test_required_facts_match_digits_words_and_whole_words_only() -> None:
 
 
 def test_required_facts_only_name_real_cases() -> None:
-    case_ids = {case["case_id"] for case in json.loads(CASES_PATH.read_text(encoding="utf-8"))}
+    cases = json.loads(CASES_PATH.read_text(encoding="utf-8")) + json.loads(REGRESSION_PATH.read_text(encoding="utf-8"))
+    case_ids = {case["case_id"] for case in cases}
     assert set(json.loads(REQUIRED_FACTS_PATH.read_text(encoding="utf-8"))) <= case_ids
+
+
+def test_the_notice_period_case_catches_a_swapped_number() -> None:
+    """policy-notice-017 asks for the notice period (3 working days). 12 is the annual allowance, a different fact."""
+    cases = {case["case_id"]: case for case in json.loads(REGRESSION_PATH.read_text(encoding="utf-8"))}
+    facts = json.loads(REQUIRED_FACTS_PATH.read_text(encoding="utf-8"))["policy-notice-017"]
+    assert cases["policy-notice-017"]["expected_documents"] == ["HR-LEAVE-001"]
+    assert missing_facts("Paling lambat 12 hari kerja sebelum tanggal mulai. [HR-LEAVE-001]", facts) == ["3"]
+    assert missing_facts("Paling lambat tiga hari kerja sebelum tanggal mulai. [HR-LEAVE-001]", facts) == []
 
 
 def test_missing_tool_and_wrong_outcome_fail() -> None:

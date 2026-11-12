@@ -27,7 +27,7 @@ from .providers import ModelProvider
 from .repository import Repository
 from .security import redact, stable_safety_id
 from .conversation import ConversationStore, conversation_scope
-from .grounding import unsupported_numbers
+from .grounding import number_context_mismatches, unsupported_numbers
 from .lc_agent import RUN_CONFIG, AgentRun, DeadlineExceeded, ProviderFailure, build_agent, history_messages
 from .tools import ToolExecutor
 
@@ -234,9 +234,12 @@ class AgentService:
             error = f"{type(failure.original).__name__}: {redact(str(failure.original))}"
         retrieved, proposal, ticket_draft = run.retrieved, run.proposal, run.ticket_draft
         # K34: every number the model states must appear in something this run saw.
-        evidence = [message, *(item["content"] for item in history), today, *run.tool_outputs]
-        unsupported = unsupported_numbers(final_text, evidence) if final_text else []
-
+        evidence = [message, *(item["content"] for item in history), *run.tool_outputs]
+        unsupported = unsupported_numbers(final_text.replace(today, ""), evidence) if final_text else []
+        policy_texts = [chunk["excerpt"] for chunks in run.retrieved.values() for chunk in chunks]
+        context_mismatch = number_context_mismatches(
+            final_text.replace(today, ""), policy_texts, [message, *(item["content"] for item in history)]
+        ) if final_text else []
         citations: list[Citation] = []
         if final_text is None:
             outcome, answer, proposal = Outcome.abstained, ABSTAIN_FAILURE, None
@@ -267,6 +270,10 @@ class AgentService:
                 # or searched instead of calling the tool (live: 5 of 10 runs for a past date).
                 # Nothing was done, so the outcome says so, whatever the text says.
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_not_performed"
+            elif run.search_failed and not citations:
+                outcome, answer, stop_reason = Outcome.abstained, final_text, "search_failed"
+            elif run.searched and not citations:
+                outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             elif run.searched and not citations:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             elif unsupported and s.answer_number_check == "enforce":
@@ -289,6 +296,7 @@ class AgentService:
             input_tokens=run.input_tokens, output_tokens=run.output_tokens,
             timings={"model_ms": run.model_ms, "tools_ms": run.tools_ms}, error=error,
             tool_limit_reached=run.tool_limit_reached, unsupported_numbers=unsupported,
+            number_context_mismatch=context_mismatch,
         )
 
     def _send_confirmed_ticket(
@@ -319,6 +327,7 @@ class AgentService:
         retrieved: list[str], search_rankings: list[list[str]],
         input_tokens: int, output_tokens: int, timings: dict[str, int], error: str | None,
         tool_limit_reached: bool = False, unsupported_numbers: list[str] | None = None,
+        number_context_mismatch: list[str] | None = None,
     ) -> ChatResponse:
         s = self.settings
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -341,6 +350,8 @@ class AgentService:
             "tool_limit_reached": tool_limit_reached,
             # K34: numbers the model stated without evidence (also recorded in "shadow" mode).
             "unsupported_numbers": unsupported_numbers or [],
+            # K34 follow-up (shadow): numbers taken from the wrong policy clause; recorded, never blocks.
+            "number_context_mismatch": number_context_mismatch or [],"unsupported_numbers": unsupported_numbers or [],
             "retrieved_documents": retrieved,
             "search_rankings": search_rankings,
             "cited_documents": [c.document_id for c in citations],

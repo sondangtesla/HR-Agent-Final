@@ -208,7 +208,7 @@ class MemoryRepository:
 
     def index_status(self) -> dict[str, int]:
         # Memory tests run lexical-only, so missing vectors do not make the index "not ready".
-        return {"chunks": len(self.chunks), "missing_embeddings": 0}
+        return {"chunks": len(self.chunks), "missing_embeddings": 0, "active_chunks": sum(c.status == "berlaku" for c in self.chunks)}
 
     def confirm_proposal(self, employee_id: str, proposal_id: str, idempotency_key: str) -> ActionResult:
         """Same rules and order as PostgresRepository.confirm_proposal."""
@@ -584,10 +584,11 @@ class PostgresRepository:
             row = conn.execute(
                 """
                 SELECT count(*) AS chunks,
-                       count(*) FILTER (WHERE embedding IS NULL) AS missing_embeddings
+                       count(*) FILTER (WHERE embedding IS NULL) AS missing_embeddings,
+                       count(*) FILTER (WHERE status = 'berlaku') AS active_chunks
                 FROM policy_chunks
                 """
             ).fetchone()
-        return {"chunks": row["chunks"], "missing_embeddings": row["missing_embeddings"]}
+        return {"chunks": row["chunks"], "missing_embeddings": row["missing_embeddings"], "active_chunks": row["active_chunks"]}
 
 

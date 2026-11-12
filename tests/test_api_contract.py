@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
+import psycopg
 from fastapi.testclient import TestClient
 
 from src.api import create_app
@@ -105,3 +106,23 @@ def test_readiness_fails_when_database_is_down(repository: MemoryRepository, set
     response = client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["checks"]["database"] == "fail"
+
+
+def test_readiness_fails_when_the_policy_table_has_an_old_schema(repository: MemoryRepository,
+                                                                  client: TestClient) -> None:
+    """T13: a database seeded before K32 has no `status` column, so every search fails.
+
+    The database answers and the table has rows, so /readyz used to say `ready`. The new index check reads
+    the same columns as search; on an old schema PostgreSQL raises UndefinedColumn. The label
+    `schema_outdated` is the one proposed in the plan: change it here and in the code together.
+    """
+    def old_schema():
+        raise psycopg.errors.UndefinedColumn('column "status" does not exist')
+
+    repository.index_status = old_schema
+    response = client.get("/readyz")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "not_ready"  # a readiness body, not the generic 503 problem detail
+    assert body["checks"]["database"] == "ok"
+    assert body["checks"]["index"] == "schema_outdated"

@@ -13,5 +13,14 @@
     "expected_tool_status": {"prepare_leave_request": "blocked"},
     "expected_outcome": "abstained",
     "hard_gate": true
+  },
+  {
+    "case_id": "policy-notice-017",
+    "category": "policy",
+    "description": "Regression (K34 follow-up): HR-LEAVE-001 has two facts in \"hari kerja\", the annual allowance (12) and the notice period (3). A correct answer to this question states 3.",
+    "input": "Paling lambat kapan saya harus mengajukan cuti?",
+    "expected_documents": ["HR-LEAVE-001"],
+    "expected_tools": ["search_hr_policy"],
+    "hard_gate": false
   }
 ]

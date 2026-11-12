@@ -353,3 +353,38 @@ def test_search_skips_archived_and_future_policies(repo) -> None:
     finally:
         if not isinstance(repo, MemoryRepository):
             admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-K32-%%'")
+
+
+def test_index_status_counts_the_policies_that_search_can_use(repo) -> None:
+    """T13: readiness must read what search reads, so an old schema cannot look ready.
+
+    `active_chunks` counts rows with status 'berlaku'. One chunk in force and one archived are added, so
+    `active_chunks` must grow by exactly 1 while `chunks` grows by 2. Deltas, because PostgreSQL already
+    holds the seeded policies. The PostgreSQL variant needs a seeded database and removes its own rows.
+    """
+    vector = [1.0] + [0.0] * (get_settings().embedding_dimensions - 1)
+    chunks = [
+        PolicyChunk(chunk_id=f"TEST-T13-{name}", document_id=f"TEST-T13-{name}", title="Uji", section="Uji",
+                    version="1.0", effective_date=date(2026, 1, 1), content=f"uji {name}", status=status)
+        for name, status in (("now", "berlaku"), ("old", "arsip"))
+    ]
+    before = repo.index_status()
+    assert "active_chunks" in before, "index_status() must report active_chunks (T13)"
+    if isinstance(repo, MemoryRepository):
+        repo.chunks = [*repo.chunks, *chunks]
+        repo.embeddings = {**repo.embeddings, **{c.chunk_id: vector for c in chunks}}
+    else:
+        for c in chunks:
+            admin_execute(
+                "INSERT INTO policy_chunks (chunk_id, document_id, title, section, version, effective_date, "
+                "content, status, embedding) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)",
+                (c.chunk_id, c.document_id, c.title, c.section, c.version, c.effective_date, c.content,
+                 c.status, to_pgvector(vector)),
+            )
+    try:
+        after = repo.index_status()
+        assert after["chunks"] - before["chunks"] == 2
+        assert after["active_chunks"] - before["active_chunks"] == 1
+    finally:
+        if not isinstance(repo, MemoryRepository):
+            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-T13-%%'")

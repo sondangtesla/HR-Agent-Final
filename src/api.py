@@ -158,11 +158,14 @@ def create_app(*, settings: Settings | None = None, repository=None, cache=None,
         database_ok = repository.health()
         checks["database"] = "ok" if database_ok else "fail"
         if database_ok:
-            index = repository.index_status()
-            checks["index"] = (
-                "ok" if index["chunks"] and not index["missing_embeddings"]
-                else "empty" if not index["chunks"] else "missing_embeddings"
-            )
+            try:
+                index = repository.index_status()
+                checks["index"] = (
+                    "ok" if index["chunks"] and not index["missing_embeddings"]
+                    else "empty" if not index["chunks"] else "missing_embeddings"
+                )
+            except psycopg.errors.UndefinedColumn:
+                checks["index"] = "schema_outdated"
         else:
             checks["index"] = "unknown"
         checks["cache"] = "ok" if cache.health() else "degraded"  # Redis may die; never blocks readiness

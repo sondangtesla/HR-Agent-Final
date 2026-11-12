@@ -44,3 +44,45 @@ def unsupported_numbers(answer: str, evidence: list[str]) -> list[str]:
     for text in evidence:
         known |= numbers_in(text)
     return sorted(f"{n:g}" for n in numbers_in(answer) - known)
+
+
+
+# --- Context: a number must sit in a clause that resembles the policy clause carrying it ---
+# unsupported_numbers() only asks "does this number appear anywhere?". "Pengajuan paling lambat 12 hari kerja"
+# passes it, because 12 is in the policy, as the annual allowance and not as the notice period (3).
+_WORD = re.compile(r"[a-z]{3,}")
+_CLAUSE_SPLIT = re.compile(r"(?<=[.;!?,])\s+|\n+")
+# Words many clauses share say nothing about WHICH fact a clause states: connectors, units, number words.
+_COMMON = frozenset(
+    "yang dan atau dari untuk dengan pada dalam oleh adalah akan dapat harus boleh tidak anda saya kami bagi "
+    "sebagai ini itu per hari kerja tahun bulan minggu puluh belas sepuluh sebelas".split()
+) | frozenset(_UNITS)
+
+
+def _clauses(text: str) -> list[str]:
+    return [clause for clause in _CLAUSE_SPLIT.split(without_identifiers(text)) if clause.strip()]
+
+
+def _topic_words(clause: str) -> set[str]:
+    return set(_WORD.findall(clause.lower())) - _COMMON
+
+
+def number_context_mismatches(answer: str, policy_texts: list[str], user_texts: list[str]) -> list[str]:
+    """Numbers whose answer clause resembles a policy clause of ANOTHER fact more than the one carrying them.
+
+    Only numbers found in the policy text are judged: a number in no policy clause is the plain check's job,
+    and a number the user wrote is theirs. Meant for shadow mode first: paraphrases can trigger false alarms.
+    """
+    from_user = set().union(*(numbers_in(text) for text in user_texts)) if user_texts else set()
+    policy = [(numbers_in(clause), _topic_words(clause)) for text in policy_texts for clause in _clauses(text)]
+    flagged: set[float] = set()
+    for clause in _clauses(answer):
+        words = _topic_words(clause)
+        for number in numbers_in(clause) - from_user:
+            own = [len(words & topic) for numbers, topic in policy if number in numbers]
+            if not own:
+                continue
+            foreign = [len(words & topic) for numbers, topic in policy if number not in numbers]
+            if max(foreign, default=0) > max(own):
+                flagged.add(number)
+    return sorted(f"{n:g}" for n in flagged)
