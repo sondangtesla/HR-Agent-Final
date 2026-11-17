@@ -65,6 +65,21 @@ Aturan:
 8. Jawab singkat dalam Bahasa Indonesia. Jangan menampilkan proses berpikir Anda.
 """
 
+# Added only when the token says "manager": an employee's prompt stays exactly SYSTEM_INSTRUCTIONS.
+MANAGER_INSTRUCTIONS = """
+Tambahan karena pengguna ini MANAJER:
+9. Untuk pertanyaan tentang cuti bawahan langsung (siapa yang cuti, pengajuan yang menunggu
+   keputusan, hari dengan banyak anggota tim cuti), panggil get_team_leave_analytics. Ini
+   pengecualian aturan 4: hanya bawahan langsung, dan hanya data dari tool ini. Ubah "minggu depan",
+   "bulan Desember", dan sejenisnya menjadi start_date dan end_date; untuk pending_queue isi
+   keduanya null. Jawaban tentang tim tidak butuh search_hr_policy dan tidak butuh sitasi.
+10. Sebut anggota tim dengan nama saja. Tulis angka (jumlah orang, persen, hari menunggu, tanggal)
+    persis seperti hasil tool; jangan menghitung sendiri. Jangan menyebut alasan cuti, saldo, atau
+    data pegawai di luar tim. Status approved = sudah disetujui; pending_manager_review = menunggu
+    keputusan Anda.
+11. Anda tidak dapat menyetujui atau menolak pengajuan. Keputusan itu dibuat manajer di sistem HR.
+"""
+
 ABSTAIN_NO_EVIDENCE = (
     "Maaf, saya tidak menemukan bukti kebijakan yang cukup untuk menjawab ini. "
     "Silakan ajukan tiket HR agar tim HR dapat membantu."
@@ -203,6 +218,8 @@ class AgentService:
 
         today = self.tools.today_factory().isoformat()
         instructions = SYSTEM_INSTRUCTIONS.format(today=today, display_name=auth.display_name)
+        if auth.role == "manager":
+            instructions += MANAGER_INSTRUCTIONS
         if dropped_draft is not None:
             # Without this the model may tell the user the draft is "being processed".
             instructions += DRAFT_DROPPED_NOTE
@@ -255,6 +272,11 @@ class AgentService:
             stop_reason = stop_reason or "ticket_draft"
         else:
             citations, valid = validate_citations(final_text, retrieved)
+            # "Siapa yang ambil cuti 2026-12-01?" from a manager looks like a leave request to
+            # is_leave_action_request. A successful team lookup is what answered it.
+            team_answered = any(
+                t.name == "get_team_leave_analytics" and t.status == "ok" for t in run.tool_summaries
+            )
             if not valid:
                 outcome, answer, proposal, stop_reason = (
                     Outcome.abstained, ABSTAIN_INVALID_CITATION, None, "invalid_citation"
@@ -265,7 +287,7 @@ class AgentService:
                 # The requested action was not carried out (e.g. a past date). The model's text
                 # explains why; the outcome says honestly that nothing was done.
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_blocked"
-            elif is_leave_action_request(request.message):
+            elif is_leave_action_request(request.message) and not team_answered:
                 # K28: a leave request for a date ended without a proposal. The model asked back
                 # or searched instead of calling the tool (live: 5 of 10 runs for a past date).
                 # Nothing was done, so the outcome says so, whatever the text says.
