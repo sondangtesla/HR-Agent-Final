@@ -97,6 +97,15 @@ class LeaveRequestView(BaseModel):
     created_at: datetime
 
 
+class TeamLeaveRequest(LeaveRequestView):
+    """A direct report's request, as the team queries return it to the analytics tool.
+
+    employee_id is there to count people correctly; the tool shows only employee_name.
+    """
+    employee_id: str
+    employee_name: str
+
+
 class PolicyChunk(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

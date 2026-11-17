@@ -18,7 +18,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from .contracts import ActionProposal, ActionResult, AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk
+from .contracts import (
+    ActionProposal, ActionResult, AuthContext, LeaveBalance, LeaveRequestView, PolicyChunk, TeamLeaveRequest,
+)
 from .domain import ACTIVE_STATUSES, RULE_POLICY_VERSIONS, leave_type_name, today_wib
 from .monitoring import summarize
 from .security import redact, token_hash
@@ -89,6 +91,10 @@ class Repository(Protocol):
     def get_proposal(self, employee_id: str, proposal_id: str) -> tuple[str, ActionProposal] | None: ...
     def confirm_proposal(self, employee_id: str, proposal_id: str, idempotency_key: str) -> ActionResult: ...
     def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]: ...
+    def count_team_members(self, manager_id: str) -> int: ...
+    def list_team_requests(
+        self, manager_id: str, start: date | None = None, end: date | None = None
+    ) -> list[TeamLeaveRequest]: ...
     def create_ticket(self, employee_id: str, category: str, summary: str) -> str: ...
     def save_trace(self, trace: dict[str, Any]) -> None: ...
     def get_trace(self, trace_id: str) -> dict[str, Any] | None: ...
@@ -112,6 +118,9 @@ class MemoryRepository:
         # chunk_id -> vector. Empty by default, so vector_search returns nothing until a test fills it.
         self.embeddings: dict[str, list[float]] = {}
         self.identities: dict[str, AuthContext] = {}  # token_hash -> identity
+        # employee_id -> name and employee_id -> manager_id, like the employees table, for the team queries.
+        self.names: dict[str, str] = {}
+        self.manager_of: dict[str, str | None] = {}
         self.balances: dict[str, list[LeaveBalance]] = {}
         self.proposals: dict[str, tuple[str, ActionProposal]] = {}
         # (employee_id, request). Tests may append rows directly to set up a scenario.
@@ -127,6 +136,8 @@ class MemoryRepository:
         for row in json.loads((DATA_DIR / "employees.json").read_text(encoding="utf-8")):
             identity = AuthContext.model_validate(row)
             self.identities[token_hash(row["token"])] = identity
+            self.names[identity.employee_id] = identity.display_name
+            self.manager_of[identity.employee_id] = row.get("manager_id")
             self.balances[identity.employee_id] = [
                 LeaveBalance(leave_type=leave_type, available_days=days, as_of_date=as_of)
                 for leave_type, days in row.get("balances", {}).items()
@@ -167,6 +178,22 @@ class MemoryRepository:
     def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]:
         mine = [request for owner, request in self.requests if owner == employee_id]
         return sorted(mine, key=lambda r: (r.created_at, r.request_id), reverse=True)
+
+    def count_team_members(self, manager_id: str) -> int:
+        return sum(manager == manager_id for manager in self.manager_of.values())
+
+    def list_team_requests(
+        self, manager_id: str, start: date | None = None, end: date | None = None
+    ) -> list[TeamLeaveRequest]:
+        team = [
+            TeamLeaveRequest(**request.model_dump(), employee_id=owner, employee_name=self.names[owner])
+            for owner, request in self.requests
+            if self.manager_of.get(owner) == manager_id
+            and request.status in ACTIVE_STATUSES
+            and (start is None or request.end_date >= start)
+            and (end is None or request.start_date <= end)
+        ]
+        return sorted(team, key=lambda r: (r.start_date, r.request_id))
 
     def create_ticket(self, employee_id: str, category: str, summary: str) -> str:
         ticket_id = new_ticket_id()
@@ -472,6 +499,39 @@ class PostgresRepository:
                 (employee_id,),
             ).fetchall()
         return [LeaveRequestView(**row) for row in rows]
+
+    def count_team_members(self, manager_id: str) -> int:
+        """Direct reports only: a manager is not a member of their own team."""
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS members FROM employees WHERE manager_id = %s", (manager_id,)
+            ).fetchone()
+        return row["members"]
+
+    def list_team_requests(
+        self, manager_id: str, start: date | None = None, end: date | None = None
+    ) -> list[TeamLeaveRequest]:
+        """Active requests (pending or approved) of the manager's direct reports.
+
+        With start/end, only requests sharing at least one day with that period; None leaves
+        that side open. The WHERE clause picks the team; row-level security checks it again.
+        """
+        with self._as_user(manager_id) as conn:
+            rows = conn.execute(
+                """
+                SELECT e.employee_id, e.display_name AS employee_name, r.request_id, r.leave_type,
+                       r.start_date, r.end_date, r.business_days, r.status, r.created_at
+                FROM leave_requests r
+                JOIN employees e ON e.employee_id = r.employee_id
+                WHERE e.manager_id = %(manager_id)s
+                  AND r.status = ANY(%(statuses)s)
+                  AND (%(start)s::date IS NULL OR r.end_date >= %(start)s)
+                  AND (%(end)s::date IS NULL OR r.start_date <= %(end)s)
+                ORDER BY r.start_date, r.request_id
+                """,
+                {"manager_id": manager_id, "statuses": sorted(ACTIVE_STATUSES), "start": start, "end": end},
+            ).fetchall()
+        return [TeamLeaveRequest(**row) for row in rows]
 
     def confirm_proposal(self, employee_id: str, proposal_id: str, idempotency_key: str) -> ActionResult:
         """Turn a proposal into exactly one pending request, in one transaction.

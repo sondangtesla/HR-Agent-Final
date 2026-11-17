@@ -24,6 +24,7 @@ from src.repository import ConflictError, MemoryRepository, PostgresRepository, 
 TODAY = date(2026, 9, 23)  # Wednesday, same frozen day as the rest of the suite
 A, B = "EMP-901", "EMP-902"  # test-only employees: annual balance 8 and 3, like Alya and Bima
 TEST_BALANCES = {A: {"annual": 8, "sick": 10, "parental": 60}, B: {"annual": 3, "sick": 10, "parental": 60}}
+M = "EMP-900"  # test-only manager of A and B, created only by the team test
 
 
 def admin_execute(sql: str, params: tuple = ()) -> list[dict]:
@@ -33,7 +34,7 @@ def admin_execute(sql: str, params: tuple = ()) -> list[dict]:
 
 
 def _cleanup() -> None:
-    ids = list(TEST_BALANCES)
+    ids = [*TEST_BALANCES, M]
     for table in ("leave_requests", "action_proposals", "hr_tickets", "traces", "leave_balances", "employees"):
         admin_execute(f"DELETE FROM {table} WHERE employee_id = ANY(%s)", (ids,))  # constant table names
 
@@ -210,6 +211,41 @@ def test_requests_are_own_and_newest_first(repo) -> None:
     add_request(repo, B, "TEST-BIMA", "annual", date(2026, 10, 5), date(2026, 10, 5), 1, "approved", new)
     mine = [r.request_id for r in repo.list_leave_requests(A) if r.request_id.startswith("TEST-")]
     assert mine == ["TEST-NEW", "TEST-OLD"]
+
+
+# --- Team queries for the manager analytics ---
+
+def make_team(repo) -> None:
+    """Test setup only: M manages A and B, as Sari manages Alya and Bima."""
+    if isinstance(repo, MemoryRepository):
+        repo.names.update({A: f"Test Employee {A}", B: f"Test Employee {B}"})
+        repo.manager_of.update({A: M, B: M})
+        return
+    admin_execute("INSERT INTO employees VALUES (%s, 'Test Manager', 'manager', %s)", (M, "9" * 64))
+    admin_execute("UPDATE employees SET manager_id = %s WHERE employee_id = ANY(%s)", (M, [A, B]))
+
+
+def test_team_queries_return_active_requests_of_direct_reports_only(repo) -> None:
+    make_team(repo)
+    add_request(repo, A, "TEST-T1", "annual", date(2026, 12, 1), date(2026, 12, 3), 3, "approved")
+    add_request(repo, B, "TEST-T2", "sick", date(2026, 12, 2), date(2026, 12, 2), 1, "pending_manager_review")
+    add_request(repo, B, "TEST-T3", "annual", date(2026, 12, 14), date(2026, 12, 15), 2, "pending_manager_review")
+    add_request(repo, A, "TEST-T4", "annual", date(2026, 12, 2), date(2026, 12, 2), 1, "cancelled")  # not counted
+    add_request(repo, M, "TEST-T5", "annual", date(2026, 12, 2), date(2026, 12, 2), 1, "approved")  # manager's own
+
+    assert repo.count_team_members(M) == 2
+    assert repo.count_team_members(A) == 0  # an employee has no team
+    assert repo.list_team_requests(A) == []
+
+    every = repo.list_team_requests(M)
+    assert [(r.request_id, r.employee_id, r.employee_name, r.leave_type, r.status) for r in every] == [
+        ("TEST-T1", A, f"Test Employee {A}", "annual", "approved"),
+        ("TEST-T2", B, f"Test Employee {B}", "sick", "pending_manager_review"),
+        ("TEST-T3", B, f"Test Employee {B}", "annual", "pending_manager_review"),
+    ]
+    # A request counts when it shares at least one day with the period: both edges included.
+    assert [r.request_id for r in repo.list_team_requests(M, date(2026, 12, 3), date(2026, 12, 9))] == ["TEST-T1"]
+    assert [r.request_id for r in repo.list_team_requests(M, date(2026, 12, 10), date(2026, 12, 14))] == ["TEST-T3"]
 
 
 def test_ticket_summary_is_redacted_when_stored(repo) -> None:
