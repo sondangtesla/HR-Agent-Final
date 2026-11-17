@@ -5,7 +5,10 @@ from datetime import date
 
 import pytest
 
-from ui_format import confirmation_message, long_date, proposal_markdown, status_label, wib_time
+from ui_format import (
+    alert_rows, confirmation_message, error_message, example_questions, leave_request_rows, long_date,
+    outcome_label, proposal_markdown, status_label, technical_details, wib_time,
+)
 
 PROPOSAL = {
     "proposal_id": "AP-3f9c0a",
@@ -59,3 +62,61 @@ def test_status_words_are_translated() -> None:
     assert status_label("something_new") == "something_new"  # unknown values are shown, never hidden
     assert confirmation_message({"request_id": "LR-1", "status": "pending_manager_review"}) == \
         "Permintaan LR-1 sudah dibuat dan menunggu tinjauan manajer (status: `pending_manager_review`)."
+
+
+# --- Chat details, requests table, errors, alerts, example questions ---
+
+def test_technical_details_keep_outcome_and_trace_for_the_grader() -> None:
+    """docker-delivery.md: the answer must show its trace. It is folded away, not removed."""
+    result = {"outcome": "abstained", "trace_id": "tr-abc",
+              "tool_calls": [{"name": "prepare_leave_request", "status": "blocked", "duration_ms": 3}]}
+    assert technical_details(result) == "Outcome: abstained · Trace: tr-abc"
+    assert "prepare_leave_request" not in technical_details(result)  # tool names never reach the UI
+    assert outcome_label("abstained").startswith("Tidak dijawab")
+    assert outcome_label("something_new") == "something_new"
+
+
+def test_leave_requests_are_readable_and_keep_the_raw_status() -> None:
+    rows = leave_request_rows([{
+        "request_id": "LR-HIST-010", "leave_type": "annual", "start_date": "2026-12-28", "end_date": "2026-12-29",
+        "business_days": 2, "status": "pending_manager_review", "created_at": "2026-11-15T20:00:00+00:00",
+    }])
+    assert rows == [{
+        "Nomor": "LR-HIST-010", "Jenis": "Cuti tahunan",
+        "Tanggal": "Senin, 28 Desember 2026 – Selasa, 29 Desember 2026", "Hari kerja": 2,
+        "Status": "Menunggu tinjauan manajer",
+        "Diajukan": "Senin, 16 November 2026",  # 20:00 UTC on the 15th is already the 16th in WIB
+        "Kode status": "pending_manager_review",
+    }]
+
+
+def test_error_messages_are_readable_and_keep_the_code() -> None:
+    assert error_message(403, "Monitoring admin only") == \
+        "Akses ditolak: menu ini hanya untuk peran yang berwenang. (API 403)"
+    # A conflict already carries the right sentence from the API.
+    assert error_message(409, "Proposal sudah kedaluwarsa (expired).") == "Proposal sudah kedaluwarsa (expired). (API 409)"
+
+
+def test_alerts_become_table_rows() -> None:
+    alert = {"rule_id": "agent-latency-p95", "metric": "p95_latency_ms", "value": 9020, "threshold": 8000,
+             "samples": 34, "owner": "AI Platform", "response": "Inspect provider latency."}
+    assert alert_rows([alert]) == [{"Alert": "agent-latency-p95", "Metrik": "p95_latency_ms", "Nilai": 9020,
+                                     "Ambang": 8000, "Sampel": 34, "Pemilik": "AI Platform",
+                                     "Tindakan": "Inspect provider latency."}]
+
+
+@pytest.mark.parametrize("today", [
+    date(2026, 11, 18),  # Wednesday: a week ahead is Wednesday the 25th, the next Monday is the 30th
+    date(2026, 11, 22),  # Sunday
+    date(2026, 11, 23),  # Monday: exactly a week ahead
+])
+def test_the_leave_example_is_always_a_future_monday_and_tuesday(today: date) -> None:
+    leave = example_questions("EMP-001", today)[-1]
+    assert leave == "Siapkan cuti tahunan 2026-11-30 sampai 2026-12-01"
+
+
+def test_examples_follow_the_persona() -> None:
+    today = date(2026, 11, 18)
+    assert any("tim saya" in q for q in example_questions("EMP-010", today))
+    assert not any("tim saya" in q for q in example_questions("EMP-001", today))  # employees get no team examples
+    assert example_questions("ADM-001", today) == []

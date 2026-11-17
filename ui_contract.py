@@ -30,8 +30,13 @@ def load_personas(path: Path) -> list[dict[str, str]]:
 
 
 def _forget_chat(state: dict) -> None:
-    """Drop the shown answer, the confirmation keys, and the conversation of the previous chat."""
+    """Drop the shown answers, the confirmation keys, and the conversation of the previous chat.
+
+    chat_history is what the UI shows; it must go with the conversation, or the next persona
+    would see the previous persona's questions and answers.
+    """
     state.pop("last_chat", None)
+    state.pop("chat_history", None)
     state.pop("conversation_id", None)
     for key in list(state):
         if key.startswith("idem_"):
