@@ -42,9 +42,18 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS employees (
     employee_id   TEXT PRIMARY KEY,
     display_name  TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('employee', 'monitoring_admin')),
-    token_hash    TEXT NOT NULL UNIQUE CHECK (char_length(token_hash) = 64)
+    role          TEXT NOT NULL CHECK (role IN ('employee', 'monitoring_admin', 'manager')),
+    token_hash    TEXT NOT NULL UNIQUE CHECK (char_length(token_hash) = 64),
+    department    TEXT,
+    manager_id    TEXT REFERENCES employees (employee_id)
 );
+-- CREATE TABLE IF NOT EXISTS tidak mengubah tabel yang sudah ada, jadi kolom dan role baru
+-- juga ditambahkan lewat ALTER. Kolom baru selalu di akhir: ada test yang INSERT tanpa nama kolom.
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS department TEXT;
+ALTER TABLE employees ADD COLUMN IF NOT EXISTS manager_id TEXT REFERENCES employees (employee_id);
+ALTER TABLE employees DROP CONSTRAINT IF EXISTS employees_role_check;
+ALTER TABLE employees ADD CONSTRAINT employees_role_check
+    CHECK (role IN ('employee', 'monitoring_admin', 'manager'));
 
 CREATE TABLE IF NOT EXISTS leave_balances (
     employee_id     TEXT NOT NULL REFERENCES employees (employee_id),
@@ -320,14 +329,16 @@ def seed_employees(conn: psycopg.Connection, employees: list[dict[str, Any]], as
             raise ValueError(f"{identity.employee_id}: token is required")
         conn.execute(
             """
-            INSERT INTO employees (employee_id, display_name, role, token_hash)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO employees (employee_id, display_name, role, token_hash, department)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (employee_id) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
                 role = EXCLUDED.role,
-                token_hash = EXCLUDED.token_hash
+                token_hash = EXCLUDED.token_hash,
+                department = EXCLUDED.department
             """,
-            (identity.employee_id, identity.display_name, identity.role, token_hash(token)),
+            (identity.employee_id, identity.display_name, identity.role, token_hash(token),
+             row.get("department")),
         )
         for leave_type, days in row.get("balances", {}).items():
             balance = LeaveBalance(leave_type=leave_type, available_days=days, as_of_date=as_of)
@@ -339,7 +350,13 @@ def seed_employees(conn: psycopg.Connection, employees: list[dict[str, Any]], as
                 """,
                 (identity.employee_id, balance.leave_type, balance.available_days, balance.as_of_date),
             )
-
+        # Atasan diisi setelah semua pegawai ada, supaya foreign key manager_id selalu menemukan
+        # barisnya, apa pun urutan pegawai di file JSON.
+    for row in employees:
+        conn.execute(
+            "UPDATE employees SET manager_id = %s WHERE employee_id = %s",
+            (row.get("manager_id"), row["employee_id"]),
+        )
 
 def seed_historical_requests(conn: psycopg.Connection, requests: list[dict[str, Any]]) -> None:
     """Insert history once. Existing rows are never changed, because history is immutable."""

@@ -17,7 +17,7 @@ class Outcome(str, Enum):
 class AuthContext(BaseModel):
     employee_id: str
     display_name: str
-    role: Literal["employee", "monitoring_admin"] = "employee"
+    role: Literal["employee", "monitoring_admin", "manager"] = "employee"
 
 
 class ChatRequest(BaseModel):

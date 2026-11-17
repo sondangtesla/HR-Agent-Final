@@ -4,14 +4,18 @@
     "display_name": "Alya Pratama",
     "role": "employee",
     "token": "token-alya",
-    "balances": {"annual": 8, "sick": 10, "parental": 60}
+    "balances": {"annual": 8, "sick": 10, "parental": 60},
+    "department": "Engineering",
+    "manager_id": "EMP-010"
   },
   {
     "employee_id": "EMP-002",
     "display_name": "Bima Santoso",
     "role": "employee",
     "token": "token-bima",
-    "balances": {"annual": 3, "sick": 10, "parental": 60}
+    "balances": {"annual": 3, "sick": 10, "parental": 60},
+    "department": "Engineering",
+    "manager_id": "EMP-010"
   },
   {
     "employee_id": "ADM-001",
@@ -19,5 +23,66 @@
     "role": "monitoring_admin",
     "token": "token-admin",
     "balances": {}
+  },
+  {
+    "employee_id": "EMP-010",
+    "display_name": "Sari Wijaya",
+    "role": "manager",
+    "token": "token-sari",
+    "balances": {"annual": 10, "sick": 10, "parental": 60},
+    "department": "Engineering"
+  },
+  {
+    "employee_id": "EMP-011",
+    "display_name": "Citra Lestari",
+    "role": "employee",
+    "token": "token-citra",
+    "balances": {"annual": 7, "sick": 10, "parental": 60},
+    "department": "Engineering",
+    "manager_id": "EMP-010"
+  },
+  {
+    "employee_id": "EMP-012",
+    "display_name": "Dimas Saputra",
+    "role": "employee",
+    "token": "token-dimas",
+    "balances": {"annual": 9, "sick": 10, "parental": 60},
+    "department": "Engineering",
+    "manager_id": "EMP-010"
+  },
+  {
+    "employee_id": "EMP-020",
+    "display_name": "Dewi Anggraini",
+    "role": "manager",
+    "token": "token-dewi",
+    "balances": {"annual": 12, "sick": 10, "parental": 60},
+    "department": "Finance"
+  },
+  {
+    "employee_id": "EMP-021",
+    "display_name": "Eka Putri",
+    "role": "employee",
+    "token": "token-eka",
+    "balances": {"annual": 9, "sick": 10, "parental": 60},
+    "department": "Finance",
+    "manager_id": "EMP-020"
+  },
+  {
+    "employee_id": "EMP-022",
+    "display_name": "Fajar Nugroho",
+    "role": "employee",
+    "token": "token-fajar",
+    "balances": {"annual": 9, "sick": 10, "parental": 60},
+    "department": "Finance",
+    "manager_id": "EMP-020"
+  },
+  {
+    "employee_id": "EMP-023",
+    "display_name": "Gita Maharani",
+    "role": "employee",
+    "token": "token-gita",
+    "balances": {"annual": 12, "sick": 10, "parental": 60},
+    "department": "Finance",
+    "manager_id": "EMP-020"
   }
 ]
