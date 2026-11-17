@@ -144,6 +144,12 @@ class TicketArgs(BaseModel):
     summary: str = Field(min_length=5, max_length=500)
 
 
+class TeamAnalyticsArgs(BaseModel):
+    metric: Literal["team_absence", "pending_queue", "coverage_risk"]
+    start_date: date | None = None
+    end_date: date | None = None
+
+
 class ModelToolCall(BaseModel):
     call_id: str
     name: str
