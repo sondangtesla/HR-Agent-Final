@@ -234,12 +234,35 @@ GRANT UPDATE (confirmed_at) ON action_proposals TO {role};
 GRANT UPDATE (available_days) ON leave_balances TO {role};  -- K26: lowering only, see the trigger
 GRANT INSERT ON hr_tickets TO {role};
 
+-- Row-level security: a second guard under the WHERE clauses in repository.py. The repository
+-- sets app.employee_id (from the bearer token) at the start of every transaction on these three
+-- tables. Unset means NULL, which matches no row: a query that forgets the identity sees nothing.
+-- The table owner (hr_app, used by setup_lab) is not subject to these policies.
 ALTER TABLE leave_requests ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS api_read ON leave_requests;
-CREATE POLICY api_read ON leave_requests FOR SELECT TO {role} USING (true);
+CREATE POLICY api_read ON leave_requests FOR SELECT TO {role} USING (
+    employee_id = current_setting('app.employee_id', true)
+    -- a manager also sees the requests of direct reports; an employee has none
+    OR employee_id IN (SELECT employee_id FROM employees
+                       WHERE manager_id = current_setting('app.employee_id', true))
+);
 DROP POLICY IF EXISTS api_insert_pending_only ON leave_requests;
 CREATE POLICY api_insert_pending_only ON leave_requests FOR INSERT TO {role}
-    WITH CHECK (status = 'pending_manager_review' AND status_set_by = 'assistant');
+    WITH CHECK (status = 'pending_manager_review' AND status_set_by = 'assistant'
+                AND employee_id = current_setting('app.employee_id', true));
+
+-- Balances and proposals: own rows only, for every command. A manager never sees a report's balance.
+ALTER TABLE leave_balances ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS api_own_balances ON leave_balances;
+CREATE POLICY api_own_balances ON leave_balances FOR ALL TO {role}
+    USING (employee_id = current_setting('app.employee_id', true))
+    WITH CHECK (employee_id = current_setting('app.employee_id', true));
+
+ALTER TABLE action_proposals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS api_own_proposals ON action_proposals;
+CREATE POLICY api_own_proposals ON action_proposals FOR ALL TO {role}
+    USING (employee_id = current_setting('app.employee_id', true))
+    WITH CHECK (employee_id = current_setting('app.employee_id', true));
 """
 
 

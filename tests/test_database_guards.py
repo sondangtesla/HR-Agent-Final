@@ -3,6 +3,8 @@
 - K9: CHECK and UNIQUE constraints on leave_requests (run as the table owner).
 - K9 option C: what the API login (hr_api) may and may not do.
 - K26: hr_api may lower a balance but never raise it; HR cancellation refunds the days.
+- Row-level security: hr_api sees only the rows of the user set in app.employee_id (plus a
+  manager's direct reports in leave_requests), and nothing at all when no user is set.
 
 Every case runs in a transaction that is rolled back. Skipped when PostgreSQL is not seeded.
 """
@@ -35,12 +37,24 @@ def owner():
     conn.close()
 
 
+def act_as(conn: psycopg.Connection, employee_id: str) -> None:
+    """What PostgresRepository._as_user does: name the user for the current transaction."""
+    conn.execute("SELECT set_config('app.employee_id', %s, true)", (employee_id,))
+
+
 @pytest.fixture
-def api():
+def api_no_identity():
     conn = _connect(get_settings().api_database_url)
     yield conn
     conn.rollback()
     conn.close()
+
+
+@pytest.fixture
+def api(api_no_identity):
+    """The API login acting as Alya, like every repository call made for her."""
+    act_as(api_no_identity, "EMP-001")
+    return api_no_identity
 
 
 def setup_proposal(owner: psycopg.Connection) -> None:
@@ -229,3 +243,67 @@ def test_cancelling_seeded_history_is_not_refunded(owner) -> None:
     before = annual(owner)
     owner.execute("UPDATE leave_requests SET status = 'cancelled', status_set_by = 'hr_system' WHERE request_id = 'LR-GUARD-H'")
     assert annual(owner) == before  # this system never deducted it
+
+
+# --- Row-level security: the database itself limits which rows hr_api can see or write ---
+
+PERSONAL_TABLES = ("leave_balances", "action_proposals", "leave_requests")
+
+
+def owners(conn, table: str) -> set[str]:
+    rows = conn.execute(f"SELECT DISTINCT employee_id FROM {table}").fetchall()  # constant table names
+    return {row[0] for row in rows}
+
+
+def require_team_seed(conn) -> None:
+    found = conn.execute(
+        "SELECT count(*) FROM employees WHERE employee_id IN ('EMP-010', 'EMP-011', 'EMP-020', 'EMP-021')"
+    ).fetchone()[0]
+    if found < 4:
+        pytest.skip("team demo data is not seeded")
+
+
+def test_without_a_user_the_api_sees_no_personal_rows(api_no_identity, owner) -> None:
+    for table in ("leave_balances", "leave_requests"):  # seeded, so there is always something to hide
+        assert owners(owner, table), f"{table} has no rows to hide"
+    for table in PERSONAL_TABLES:
+        assert owners(api_no_identity, table) == set(), table
+    assert owners(api_no_identity, "employees")  # login lookup still works: employees has no RLS
+
+
+def test_an_employee_sees_only_own_rows(api) -> None:
+    assert owners(api, "leave_balances") == {"EMP-001"}
+    for table in PERSONAL_TABLES:
+        assert owners(api, table) <= {"EMP-001"}, table
+
+
+def test_a_manager_sees_reports_requests_but_only_own_balance(api_no_identity) -> None:
+    require_team_seed(api_no_identity)
+    act_as(api_no_identity, "EMP-010")  # Sari, manager of Engineering
+    requests = owners(api_no_identity, "leave_requests")
+    assert {"EMP-010", "EMP-011", "EMP-012"} <= requests
+    assert requests <= {"EMP-010", "EMP-001", "EMP-002", "EMP-011", "EMP-012"}  # never Finance
+    assert owners(api_no_identity, "leave_balances") == {"EMP-010"}
+    assert owners(api_no_identity, "action_proposals") <= {"EMP-010"}
+
+
+def test_a_manager_cannot_see_another_team(api_no_identity) -> None:
+    require_team_seed(api_no_identity)
+    act_as(api_no_identity, "EMP-020")  # Dewi, manager of Finance
+    requests = owners(api_no_identity, "leave_requests")
+    assert "EMP-021" in requests
+    assert requests.isdisjoint({"EMP-001", "EMP-002", "EMP-011", "EMP-012"})
+
+
+def test_an_employee_cannot_write_or_lower_someone_else(api, owner) -> None:
+    assert denied(api, """INSERT INTO action_proposals (proposal_id, employee_id, leave_type, start_date,
+                          end_date, business_days, policy_version, expires_at)
+                          VALUES ('AP-GUARD-B', 'EMP-002', 'annual', '2026-12-01', '2026-12-01', 1,
+                                  'HR-LEAVE-001@2.1', now())""")
+    bima = "SELECT available_days FROM leave_balances WHERE employee_id = 'EMP-002' AND leave_type = 'sick'"
+    before = owner.execute(bima).fetchone()[0]
+    lowered = api.execute(
+        "UPDATE leave_balances SET available_days = available_days - 1 WHERE employee_id = 'EMP-002'"
+    )
+    assert lowered.rowcount == 0  # Bima's rows are invisible to Alya's session, so nothing matches
+    assert owner.execute(bima).fetchone()[0] == before

@@ -194,6 +194,14 @@ def test_proposal_round_trip_keeps_owner(repo) -> None:
     assert repo.get_proposal(A, "AP-TEST-MISSING") is None
 
 
+def test_another_employees_proposal_is_invisible(repo) -> None:
+    # PostgresRepository.get_proposal has no employee filter in its SQL: in PostgreSQL only
+    # row-level security hides the proposal. MemoryRepository mirrors that rule in code.
+    repo.save_proposal(A, make_proposal("AP-TEST-PRIVATE"))
+    assert repo.get_proposal(B, "AP-TEST-PRIVATE") is None
+    assert repo.get_proposal(A, "AP-TEST-PRIVATE") is not None
+
+
 def test_requests_are_own_and_newest_first(repo) -> None:
     old = datetime(2026, 9, 1, tzinfo=timezone.utc)
     new = datetime(2026, 9, 20, tzinfo=timezone.utc)
