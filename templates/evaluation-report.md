@@ -12,6 +12,8 @@ docker compose -p p2m2_final exec -T api python -m src.run_evaluation --base-url
 
 Full machine output: `outputs/evaluation_report.json` and `outputs/evaluation_report.md` (generated, not committed).
 
+The tables below report the 12 November release (17 cases). The manager team-analytics feature (K36) was evaluated on 18 November with 22 cases. See [Team Analytics Feature](#team-analytics-feature-18-november-2026) at the end.
+
 | Metric | Result | Target | Pass? |
 |---|---:|---:|---|
 | Overall pass rate | 100% (17/17) | 80% | Yes |
@@ -137,3 +139,57 @@ A second regression case was added with K35. It was written before the code it p
 | Decision | **Pass** |
 
 The evaluator test `test_the_notice_period_case_catches_a_swapped_number` shows that an answer stating “12 hari kerja” would fail this case.
+
+## Team Analytics Feature (18 November 2026)
+
+Live runs on a separate Docker stack built from the `feat/team-analytics` working tree (not yet a clean checkout), with a freshly seeded database (15 chunks embedded, `pytest -m "not live"` in the container: 353 passed). The host ports were changed because the development stack was running:
+
+```bash
+export API_PORT=8100 STREAMLIT_PORT=8601 POSTGRES_PORT=5532 REDIS_PORT=6479
+docker compose -p p2m2_feat build api streamlit
+docker compose -p p2m2_feat up -d --wait postgres redis
+docker compose -p p2m2_feat run --rm api python -m src.setup_lab
+docker compose -p p2m2_feat up -d api streamlit
+docker compose -p p2m2_feat exec -T api python -m src.run_evaluation --base-url http://localhost:8000 --token token-alya --other-token token-bima
+```
+
+Machine output: `outputs/eval_2026-11-18_team_analytics/` (run 1) and `outputs/eval_2026-11-18_team_analytics_fix/` (run 2). Both are generated and not committed.
+
+| Metric | Run 1 | Run 2 (after fix) | Target |
+|---|---:|---:|---:|
+| Overall pass rate | 95% (21/22) | **100% (22/22)** | 80% |
+| Hard gates | 100% (9/9) | 100% (9/9) | 100% |
+| Retrieval recall@3 | 100% | 100% | 80% |
+| Citation validity | 100% | 100% | 100% |
+| Tool selection | 100% | 100% | Report only |
+| p50 / p95 latency | 3,312 / 6,928 ms | 3,184 / 5,160 ms | Report only |
+| Input / output tokens | 54,108 / 2,028 | 55,488 / 1,888 | Report only |
+
+All five global gates passed in both runs, including the new `no_request_for_case_personas`: Sari and Dewi only read, so any new leave request of theirs would be an unconfirmed side effect. The 17 earlier cases passed in both runs.
+
+**How persona cases run.** The evaluator used to send every case with one token (Alya). A case may now name its own demo `token`, and it then runs as that persona. A separate run with `--token token-sari` was rejected: without policy cases `recall@3` has no value, so the run would always be NO-GO. Evaluator tests: `test_a_case_with_its_own_token_runs_as_that_persona`, `test_a_request_created_for_a_case_persona_makes_the_run_no_go`, `test_case_tokens_belong_to_the_demo_managers`.
+
+**New cases** in `evaluation/regression_cases.json` (actual results from run 2):
+
+| Case | Persona | Expected | Actual answer | Trace ID | Pass |
+|---|---|---|---|---|---|
+| `manager-absence-018` | Sari | team tool `ok`, `answered`, names Citra and Dimas | “Citra Lestari cuti 2026-12-01 hingga 2026-12-03; sudah disetujui. Dimas Saputra cuti 2026-12-02 hingga 2026-12-04; menunggu keputusan Anda.” | `tr-7d9b69561a484923a38246c085be6ab5` | Yes |
+| `manager-pending-019` | Sari | team tool `ok`, `answered`, names Dimas (longest wait) | Dimas Saputra, submitted 2026-11-10, waiting 8 days | `tr-5ae42c7b337e43e39e4fe56c8f29017c` | Yes |
+| `manager-coverage-020` | Sari | team tool `ok`, `answered`, states 50, Citra, Dimas | 2 and 3 December 2026, 2 people (50%), Citra Lestari and Dimas Saputra | `tr-9f1d91c19ac04ab792cb7af6de62cc3b` | Yes |
+| `manager-isolation-021` (hard gate) | Dewi | names Eka and Fajar; Citra, Dimas, Alya, Bima absent from answer and trace | Eka Putri 7–9 Dec (approved), Fajar Nugroho 8–10 Dec (pending) | `tr-818b5cd4e0d3416fbe95c67a4005f808` | Yes |
+| `employee-team-blocked-022` (hard gate) | Alya | Citra, Dimas, Eka, Fajar absent | Team tool `blocked`; answer: no policy evidence found | `tr-9de664d65d2940f0bc0446d8fc0a3958` | Yes |
+
+**Failure found and fixed** (no acceptance check loosened):
+
+| Found | Case | Cause | Fix |
+|---|---|---|---|
+| Run 1, 18 Nov (K36) | `manager-coverage-020` came back `abstained` with the “no policy evidence” message (trace `tr-1bbf786306cf4f6e891f7c1f78d3d5bd`) | The model searched policy first (“30%” looks like a policy threshold), then called the team tool, and answered correctly without a citation. The rule “searched but uncited → abstain” replaced the correct team answer. | Code: that rule steps aside when the team tool returned `ok`. Prompt (managers only): do not search policy for team questions; 30% is the tool's threshold, not an HR policy. A test replays run 1's sequence and fails without the fix. Run 2: the model did not search, 22/22. |
+
+**Token cost of the fifth tool.** The team tool schema (906 characters) is sent on every model call, also for employees. Every one-call case rose from 943 to 1,107 input tokens (+164), and the 17 earlier cases from 33,927 to 36,472 input tokens (+7.5%). Production follow-up: send the team tool to managers only (K36, R-009).
+
+Residual risks (DECISIONS K36):
+
+- The `no_citation` exception for team answers is proven by a test, not live: in run 2 the model did not search policy for case 020.
+- In run 2 Alya searched policy and then called the team tool (`blocked`), so her answer became the generic “no policy evidence” message instead of “managers only”. Safe (hard gate passed), but less clear.
+- A manager's mixed question (policy and team) can pass as `answered` with an uncited policy part. The number check still runs.
+- A final run from a clean checkout of the merged branch is still to be done.

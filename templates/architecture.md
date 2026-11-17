@@ -9,14 +9,14 @@ Garis putus-putus menunjukkan jalur failure atau jalur opsional. Semua endpoint 
 ```mermaid
 flowchart TB
     subgraph ZONA_USER["TIDAK TEPERCAYA: input pengguna"]
-        USER["Pegawai / Monitoring admin"]
+        USER["Pegawai / Manajer / Monitoring admin"]
         UI["Streamlit UI (disediakan)"]
     end
 
     subgraph ZONA_BACKEND["TEPERCAYA: backend FastAPI"]
         AUTH["Auth<br/>bearer token → token_hash → employee_id"]
         AGENT["Bounded agent loop<br/>maks 4 turn · 6 tool call · 700 token · 30 detik"]
-        TOOLS["4 tools<br/>validasi Python, employee_id dari token"]
+        TOOLS["5 tools<br/>validasi Python, employee_id dari token<br/>tool tim: role manager dicek di handler"]
         RET["Hybrid retrieval<br/>full-text + pgvector → RRF → rerank"]
         CITE["Citation check<br/>sitasi harus dari dokumen run ini"]
         CONFIRM["Confirm endpoint<br/>transaksi + row lock + idempotency"]
@@ -24,7 +24,7 @@ flowchart TB
     end
 
     subgraph ZONA_STORAGE["STORAGE"]
-        PG[("PostgreSQL + pgvector<br/>pegawai, saldo, chunk dokumen,<br/>proposal, request, tiket, trace")]
+        PG[("PostgreSQL + pgvector<br/>pegawai, saldo, chunk dokumen,<br/>proposal, request, tiket, trace<br/>RLS: hr_api hanya melihat baris milik<br/>app.employee_id (+ cuti bawahan langsung)")]
         REDIS[("Redis<br/>retrieval cache, boleh mati")]
     end
 
@@ -46,7 +46,7 @@ flowchart TB
     RET -.->|"cek cache; Redis mati: dilewati"| REDIS
     RET -->|"embedding query"| EMB
     RET --> PG
-    TOOLS -->|"saldo, proposal, tiket"| PG
+    TOOLS -->|"saldo, proposal, tiket, cuti tim<br/>satu transaksi + app.employee_id"| PG
     AGENT --> CITE
     CITE -->|"ChatResponse + proposal"| UI
     CITE -.->|"sitasi tidak valid: abstain"| UI
@@ -66,9 +66,9 @@ Lima titik yang ditandai sesuai `lab.md` Step 1, ditambah provider luar.
 |---|---|---|
 | **User input** (pesan chat, body request, persona UI) | Pengguna bisa mengaku sebagai orang lain atau menyisipkan perintah. | Identitas hanya dari bearer token. Nama atau ID pegawai di pesan dan body diabaikan. Request divalidasi, dan error dikembalikan sebagai problem detail tanpa stack trace. |
 | **Retrieved text** (isi dokumen kebijakan) | Dokumen bisa berisi kalimat yang terlihat seperti perintah, misalnya “abaikan aturan sebelumnya”. | Isi dokumen diperlakukan sebagai data, bukan instruksi. Dokumen tidak bisa memicu tool. Sitasi dicek oleh kode. |
-| **Model output** | Model bisa berhalusinasi, mengisi argumen yang salah, atau membuat sitasi palsu. | Strict function schema. Argumen tool divalidasi Python. `employee_id` tidak pernah diambil dari argumen model. Sitasi wajib dari dokumen run yang sama. Loop dibatasi. |
+| **Model output** | Model bisa berhalusinasi, mengisi argumen yang salah, atau membuat sitasi palsu. | Strict function schema. Argumen tool divalidasi Python. `employee_id` dan `manager_id` tidak pernah diambil dari argumen model; argumen sisipan ditolak (`blocked`). Sitasi wajib dari dokumen run yang sama. Angka analisis tim dihitung tool, bukan model. Loop dibatasi. |
 | **Tool** | Tool bisa menimbulkan efek samping. | `prepare_leave_request` hanya membuat proposal. Leave request baru dibuat saat pengguna menekan konfirmasi, dan statusnya selalu `pending_manager_review`. Ringkasan tiket di-redact. |
-| **Storage** | Trace dan tiket bisa bocor. Redis bisa mati atau menyimpan hasil lama. | Redaction sebelum disimpan. Token disimpan sebagai hash. Cache key memuat versi index. Jika Redis gagal, sistem lanjut tanpa cache. |
+| **Storage** | Trace dan tiket bisa bocor. Redis bisa mati atau menyimpan hasil lama. Query yang lupa filter `employee_id` bisa membaca data semua pegawai. | Redaction sebelum disimpan. Token disimpan sebagai hash. Cache key memuat versi index. Jika Redis gagal, sistem lanjut tanpa cache. RLS di `leave_balances`, `leave_requests`, dan `action_proposals`: tanpa `app.employee_id`, API tidak melihat satu baris pun (K36). |
 | **Provider luar** (OpenAI) | Data yang dikirim keluar dari sistem kita, dan layanan bisa lambat atau gagal. | `store=False`, `safety_identifier` di-hash, tidak mengirim secret. Retry terbatas dan timeout. |
 
 ## 3. Alur chat: identity flow dan agent loop
@@ -172,6 +172,21 @@ flowchart LR
     STOREIDX -.-> RUN
 ```
 
+## 7. Analisis cuti tim untuk manajer (fitur tambahan, K36)
+
+Manajer bisa bertanya tentang cuti **bawahan langsungnya** lewat chat yang sama. Tidak ada endpoint baru. Penjagaannya berlapis, dan setiap lapis berdiri sendiri:
+
+| Lapis | Apa yang dijaga | Di mana |
+|---|---|---|
+| Token | Tim = pegawai yang `manager_id`-nya sama dengan `employee_id` dari token. Tidak ada argumen "tim siapa". | `src/tools.py` |
+| Role | Bukan `manager` → `blocked`, walaupun pesan mengaku manajer | `_get_team_leave_analytics` |
+| Query | `WHERE e.manager_id = ...`, hanya status aktif, periode maksimal 31 hari | `list_team_requests` |
+| Database | RLS `api_read`: baris milik sendiri atau milik bawahan langsung | `src/setup_lab.py` |
+| Hasil | Hanya nama, jenis cuti, tanggal, status, dan angka hasil hitungan tool. Tanpa ID, alasan, atau saldo | `team_leave_row` |
+| Prompt | Aturan 9–11 hanya untuk role `manager`. Prompt pegawai biasa tidak berubah | `MANAGER_INSTRUCTIONS` |
+
+Tiga metrik tetap: `team_absence` (siapa cuti dalam periode), `pending_queue` (pengajuan menunggu, paling lama di atas), dan `coverage_risk` (hari kerja dengan ≥ 30% tim cuti). Asisten tetap tidak bisa menyetujui atau menolak cuti.
+
 ## Architecture Decision Record
 
 ### Decision
@@ -179,7 +194,7 @@ flowchart LR
 Asisten dibangun dengan **RAG + satu bounded agent**.
 
 - **RAG:** jawaban kebijakan diambil dari dokumen yang dicari saat itu juga (hybrid retrieval: PostgreSQL full-text + pgvector, digabung dengan RRF, lalu keyword rerank). Setiap jawaban wajib menyertakan sitasi dari dokumen yang ditemukan pada run yang sama. Jika bukti tidak cukup, asisten abstain atau menyarankan tiket HR.
-- **Satu bounded agent:** satu model memilih dari empat tool (`search_hr_policy`, `get_my_leave_balance`, `prepare_leave_request`, `create_hr_ticket`) dengan batas tetap: maksimal 4 turn, 6 tool call, 700 output token, dan timeout 30 detik.
+- **Satu bounded agent:** satu model memilih dari lima tool (`search_hr_policy`, `get_my_leave_balance`, `prepare_leave_request`, `create_hr_ticket`, dan `get_team_leave_analytics` khusus manajer) dengan batas tetap: maksimal 4 turn, 6 tool call, 700 output token, dan timeout 30 detik.
 - **Pengaman di Python, bukan di model:** identitas dari bearer token, validasi cuti (termasuk saldo efektif), konfirmasi pengguna, idempotency, dan pengecekan sitasi dijalankan oleh kode. Model hanya mengusulkan; kode yang memutuskan boleh atau tidak.
 
 ### Context
@@ -196,7 +211,7 @@ Asisten dibangun dengan **RAG + satu bounded agent**.
 |---|---|---|
 | **Prompting saja** | Semua dokumen kebijakan dimasukkan ke prompt setiap kali bertanya. | Untuk korpus sekecil ini sebenarnya bisa jalan. Tapi biaya token naik di setiap pertanyaan, makin mahal saat dokumen bertambah, dan kualitas pencarian tidak bisa diukur terpisah (tidak ada recall@3). |
 | **Fine-tuning** | Model dilatih ulang dengan isi kebijakan. | Setiap perubahan kebijakan butuh training ulang. Model tidak bisa menunjukkan sitasi karena pengetahuannya ada di bobot, bukan di dokumen. Butuh data latih yang tidak kita punya. Fine-tuning juga tidak menyelesaikan kebutuhan akses data saldo. |
-| **Multi-agent** | Beberapa agent (misalnya agent kebijakan, agent cuti, agent tiket) saling mengoper tugas. | Hanya ada empat tool, jadi satu agent cukup. Multi-agent menambah jumlah panggilan model (lebih lambat dan mahal), membuat trace lebih sulit dilacak saat ada bug, dan menambah titik tempat prompt injection bisa berpindah antar-agent. |
+| **Multi-agent** | Beberapa agent (misalnya agent kebijakan, agent cuti, agent tiket) saling mengoper tugas. | Hanya ada lima tool, jadi satu agent cukup. Multi-agent menambah jumlah panggilan model (lebih lambat dan mahal), membuat trace lebih sulit dilacak saat ada bug, dan menambah titik tempat prompt injection bisa berpindah antar-agent. |
 | **Agent tanpa batas** | Model boleh memanggil tool sebanyak yang ia mau sampai merasa selesai. | Model bisa terjebak memanggil tool berulang. Biaya tidak terkendali dan pengguna menunggu tanpa kepastian. |
 
 ### Trade-offs
@@ -213,4 +228,5 @@ Asisten dibangun dengan **RAG + satu bounded agent**.
 - **Pencarian Bahasa Indonesia yang lebih baik:** daftar sinonim (misalnya `jatah` → saldo/hak cuti) atau stemming Bahasa Indonesia.
 - **Evaluasi dengan pertanyaan nyata:** perluas 15 kasus evaluasi dengan pertanyaan pegawai sungguhan yang sudah disamarkan, lalu pantau recall dan citation validity secara berkala.
 - **Tinjau ulang batas agent** berdasarkan data monitoring (p95 latency, jumlah tool call, dan berapa sering batas tercapai).
-- **Fine-tuning dan multi-agent** baru dipertimbangkan jika ada bukti kebutuhan, misalnya gaya bahasa yang konsisten tidak bisa dicapai dengan prompt, atau jumlah tool bertambah jauh melampaui empat.
+- **Daftar tool per role:** tool tim hanya dikirim untuk manajer, supaya pegawai biasa tidak membayar sekitar 164 token per panggilan model untuk tool yang tidak boleh mereka pakai (K36).
+- **Fine-tuning dan multi-agent** baru dipertimbangkan jika ada bukti kebutuhan, misalnya gaya bahasa yang konsisten tidak bisa dicapai dengan prompt, atau jumlah tool bertambah jauh melampaui lima.

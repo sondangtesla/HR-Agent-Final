@@ -968,6 +968,64 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 3. Angka dari tool selain pencarian (misalnya saldo) tidak dinilai konteksnya.
 4. Perbaikan tanggal hanya menutup tanggal **hari ini**. Tanggal lain di output tool (`effective_date`, misalnya `2026-01-01`) masih memecah angka kecil, sehingga batas yang dicatat di K34 tetap berlaku.
 
+## K36 — Analisis cuti tim untuk manajer, dan RLS yang benar-benar menyaring
+
+**Status:** Diputuskan (17–18 Nov 2026). Fitur tambahan di branch `feat/team-analytics`. Catatan kerja lengkap: `add_fitur_analisis_notes.md`.
+
+**Temuan:**
+
+1. Manajer butuh gambaran cuti timnya (siapa yang cuti, pengajuan yang menunggu, hari dengan banyak orang cuti). Aturan prompt 4 melarang data pegawai lain, dan tidak ada tool untuk itu.
+2. RLS di K9 memakai `USING (true)` untuk `hr_api`: `hr_api` bisa membaca semua baris. Penjaga identitas hanya `WHERE employee_id = %s` di kode. Satu query yang lupa filter bisa membaca data semua pegawai.
+3. Mentor mengizinkan menambah data dan fitur, selama yang sudah ada tidak berkurang dan tidak rusak (konsultasi). Melihat cuti bawahan langsung tidak melanggar hard gate, karena di dunia nyata manajer memang boleh. Yang melanggar adalah manajer A melihat tim manajer B.
+
+**Keputusan:**
+
+- **Data.** Role `manager` di `AuthContext` dan constraint. Kolom `department` dan `manager_id` di `employees`, ditambahkan di akhir tabel lewat `ALTER`, karena ada test yang `INSERT INTO employees VALUES (...)` tanpa nama kolom. Ada 7 pegawai baru: Sari (manajer Engineering, atasan Alya, Bima, Citra, Dimas) dan Dewi (manajer Finance, atasan Eka, Fajar, Gita), plus 8 riwayat cuti. Saldo dan riwayat Alya dan Bima tidak diubah.
+- **RLS di tiga tabel inti.** `leave_requests` bisa dibaca kalau barisnya milik sendiri atau milik bawahan langsung, dan hanya boleh ditulis untuk diri sendiri. `leave_balances` dan `action_proposals` hanya milik sendiri (`FOR ALL`). Identitas dikirim lewat `set_config('app.employee_id', %s, true)` di helper `PostgresRepository._as_user`, sekali per transaksi. Nilainya hilang saat transaksi selesai, jadi pemakai berikutnya dari pool tidak mewarisinya. Tanpa identitas, `current_setting(..., true)` bernilai NULL dan `hr_api` tidak melihat satu baris pun (gagal tertutup). Tanda tangan method repository tetap `employee_id: str`.
+- **Query tim.** `count_team_members` dan `list_team_requests` di kedua repository. Yang diambil hanya status aktif, dengan filter periode yang beririsan. `WHERE e.manager_id = ...` memilih tim di kode, lalu RLS memeriksanya lagi.
+- **Tool kelima `get_team_leave_analytics(metric, start_date, end_date)`** dengan tiga metrik tetap: `team_absence`, `pending_queue`, `coverage_risk` (hari kerja dengan ≥ 30% tim cuti). Tim diambil dari token, tidak pernah dari argumen. Non-manajer mendapat `blocked`. Periode wajib untuk dua metrik pertama, paling lama 31 hari. Kalau `pending_queue` diberi tanggal, permintaan ditolak, bukan diabaikan diam-diam. Semua angka dihitung oleh fungsi murni: ambang dibandingkan dengan bilangan bulat (`orang × 100 ≥ 30 × tim`), dan persen dibulatkan ke atas mulai 0,5. Hasil tool hanya memuat nama: tanpa ID pegawai, ID pengajuan, alasan, atau saldo.
+- **Prompt.** Aturan 9–11 (`MANAGER_INSTRUCTIONS`) hanya ditambahkan kalau `auth.role == "manager"`. Prompt pegawai biasa tetap persis sama.
+- **Outcome.** Cabang `action_not_performed` dan `no_citation` dilewati hanya kalau tool tim dipanggil dengan status `ok` (`team_answered`). Alasannya, pertanyaan manajer seperti "siapa yang ambil cuti 2026-12-01" terlihat seperti permintaan cuti, dan jawaban tim memang tidak bersitasi.
+- **UI.** Persona manajer ada di file terpisah `demo_personas_team.json`. `app.py` menambahkannya kalau file itu ada, dan `Dockerfile` ikut menyalinnya. `demo_personas.json` dan test mentor tidak disentuh.
+- **Evaluator.** Sebuah kasus boleh membawa `"token"` persona. Gate global baru `no_request_for_case_personas`: persona yang hanya membaca tidak boleh punya pengajuan baru.
+
+**Opsi yang tidak dipilih:**
+
+- Mengirim `AuthContext` utuh ke repository. Pilihan ini merusak test mentor (`test_actions.py`, `test_agent_reliability.py`) yang memanggil repository dengan string. RLS juga tidak butuh role, karena manajer dikenali dari `manager_id`.
+- Menyembunyikan tool tim dari pegawai biasa. Graph LangChain dibangun sekali untuk semua pengguna, jadi perlu mengubah `lc_agent.py`. Untuk sekarang role dicek di handler (lihat Risiko 3).
+- `SET LOCAL`. Perintah ini tidak bisa menerima parameter, sedangkan `set_config(..., true)` bisa.
+- `EXCLUDE` constraint untuk cuti yang bertumpang tindih. Di luar scope fitur ini.
+- Evaluasi manajer sebagai run terpisah (`--token token-sari`). Tanpa kasus kebijakan, `recall@3` kosong, dan runner otomatis memutuskan NO-GO.
+- Persen atau jumlah orang dihitung oleh model. Angka hasil hitungan model tidak lolos cek K34 dan tidak bisa dipercaya.
+
+**Bukti:**
+
+- Test ditambah per langkah, dan seluruh suite hijau di setiap langkah: 325 → **354 passed**, 0 di-skip. Test RLS (`tests/test_database_guards.py`) membuktikan:
+  - tanpa identitas, `hr_api` melihat 0 baris;
+  - pegawai hanya melihat barisnya sendiri;
+  - Sari melihat pengajuan bawahannya, tapi hanya saldonya sendiri;
+  - Dewi tidak melihat tim Sari;
+  - Alya tidak bisa menulis atas nama Bima.
+
+  Konfirmasi ganda, bentrok, dan replay tetap ditolak. Proposal milik A tidak terlihat oleh B, walaupun SQL `get_proposal` sengaja tidak memfilter `employee_id`.
+- Test baru di `tests/test_agent.py` memutar ulang kegagalan live di bawah. Test itu merah tanpa perbaikan dan hijau dengan perbaikan.
+- Evaluasi live di stack Docker terpisah `p2m2_feat` (seed baru, `pytest` di container 353 passed):
+  - **run 1: GO 21/22.** `manager-coverage-020` gagal: model mencari kebijakan karena "30%", lalu cabang `no_citation` mengganti jawaban tim yang benar dengan abstain.
+  - **Perbaikan:** pengecualian `team_answered` di cabang `no_citation`, ditambah satu kalimat di aturan 9: "ambang 30% adalah aturan tool, bukan kebijakan HR".
+  - **run 2: GO 22/22**, hard gates 9/9, kelima gate global lulus.
+  - 17 kasus lama lulus di kedua run.
+
+**Risiko:**
+
+1. **Token naik untuk semua pengguna.** Schema tool kelima (906 karakter) ikut terkirim di setiap panggilan model, termasuk untuk pegawai biasa. Kasus satu panggilan naik dari 943 menjadi 1.107 token input (+164). Di 17 kasus lama, input naik dari 33.927 menjadi 36.472.
+2. **Label outcome manajer bisa terlalu longgar.** (a) Manajer meminta cuti untuk dirinya sendiri dengan tanggal, lalu model keliru hanya memanggil tool tim: hasilnya `answered` tanpa proposal. (b) Pertanyaan campuran (kebijakan dan tim): bagian kebijakan tanpa sitasi lolos sebagai `answered`. Cek angka K34 tetap berjalan.
+3. **Pegawai biasa melihat tool tim.** Di run 2, Alya memanggil pencarian kebijakan lalu tool tim (`blocked`), dan jawabannya menjadi abstain "tidak menemukan bukti". Hasil ini aman (tidak ada data bocor, hard gate lulus), tapi kurang jelas dibanding "hanya untuk manajer".
+4. **Pengaman `no_citation` untuk tim baru teruji lewat test.** Di run 2 model tidak mencari kebijakan untuk kasus 020, jadi yang terbukti di live adalah kalimat prompt.
+5. **Jenis cuti terlihat oleh manajer.** Manajer bisa melihat bahwa seorang bawahan sedang cuti sakit. Ini disengaja, karena manajer perlu tahu jenis cuti untuk mengatur tim. Alasan dan diagnosis tidak pernah disimpan maupun ditampilkan.
+6. **Query baru di tiga tabel inti yang lupa memakai `_as_user`** akan melihat 0 baris. Akibatnya gagal tertutup (data tampak kosong), bukan bocor. Pemilik tabel (`hr_app`) melewati RLS, jadi API tidak boleh login sebagai `hr_app`.
+
+**Tindak lanjut produksi:** daftar tool per role, supaya tool tim hanya dikirim untuk manajer. Ini menutup risiko 1 dan 3, tetapi `lc_agent.py` perlu memfilter tool per run.
+
 ## Temuan kecil
 
 Temuan berikut tidak memerlukan keputusan besar.
