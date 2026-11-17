@@ -7,6 +7,8 @@ import logging
 import math
 import threading
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -84,7 +86,7 @@ class Repository(Protocol):
     def get_pending_days(self, employee_id: str) -> dict[str, int]: ...
     def has_overlap(self, employee_id: str, start: date, end: date) -> bool: ...
     def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None: ...
-    def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None: ...
+    def get_proposal(self, employee_id: str, proposal_id: str) -> tuple[str, ActionProposal] | None: ...
     def confirm_proposal(self, employee_id: str, proposal_id: str, idempotency_key: str) -> ActionResult: ...
     def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]: ...
     def create_ticket(self, employee_id: str, category: str, summary: str) -> str: ...
@@ -158,8 +160,9 @@ class MemoryRepository:
     def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None:
         self.proposals[proposal.proposal_id] = (employee_id, proposal)
 
-    def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None:
-        return self.proposals.get(proposal_id)
+    def get_proposal(self, employee_id: str, proposal_id: str) -> tuple[str, ActionProposal] | None:
+        stored = self.proposals.get(proposal_id)
+        return stored if stored and stored[0] == employee_id else None
 
     def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]:
         mine = [request for owner, request in self.requests if owner == employee_id]
@@ -314,8 +317,20 @@ class PostgresRepository:
             ).fetchone()
         return AuthContext(**row) if row else None
 
+    @contextmanager
+    def _as_user(self, employee_id: str) -> Generator[psycopg.Connection, None, None]:
+        """One transaction that tells PostgreSQL who the user is.
+
+        Every query on leave_balances, action_proposals, and leave_requests must run here,
+        so row-level security can check employee_id. set_config(..., true) keeps the value
+        for this transaction only: the next user of the same pooled connection never sees it.
+        """
+        with self.pool.connection() as conn, conn.transaction():
+            conn.execute("SELECT set_config('app.employee_id', %s, true)", (employee_id,))
+            yield conn
+
     def get_balances(self, employee_id: str) -> list[LeaveBalance]:
-        with self.pool.connection() as conn:
+        with self._as_user(employee_id) as conn:
             rows = conn.execute(
                 """
                 SELECT leave_type, available_days, as_of_date
@@ -402,15 +417,15 @@ class PostgresRepository:
         return bool(row["overlaps"])
 
     def get_pending_days(self, employee_id: str) -> dict[str, int]:
-        with self.pool.connection() as conn:
+        with self._as_user(employee_id) as conn:
             return self._pending_days(conn, employee_id)
 
     def has_overlap(self, employee_id: str, start: date, end: date) -> bool:
-        with self.pool.connection() as conn:
+        with self._as_user(employee_id) as conn:
             return self._overlaps(conn, employee_id, start, end)
 
     def save_proposal(self, employee_id: str, proposal: ActionProposal) -> None:
-        with self.pool.connection() as conn:
+        with self._as_user(employee_id) as conn:
             conn.execute(
                 """
                 INSERT INTO action_proposals (
@@ -434,8 +449,8 @@ class PostgresRepository:
                 ),
             )
 
-    def get_proposal(self, proposal_id: str) -> tuple[str, ActionProposal] | None:
-        with self.pool.connection() as conn:
+    def get_proposal(self, employee_id: str, proposal_id: str) -> tuple[str, ActionProposal] | None:
+        with self._as_user(employee_id) as conn:
             row = conn.execute(
                 f"SELECT employee_id, {PROPOSAL_COLUMNS} FROM action_proposals WHERE proposal_id = %s",
                 (proposal_id,),
@@ -446,7 +461,7 @@ class PostgresRepository:
         return employee_id, ActionProposal(**row)
 
     def list_leave_requests(self, employee_id: str) -> list[LeaveRequestView]:
-        with self.pool.connection() as conn:
+        with self._as_user(employee_id) as conn:
             rows = conn.execute(
                 f"""
                 SELECT {REQUEST_COLUMNS}
@@ -474,7 +489,7 @@ class PostgresRepository:
              0 rows means not enough days -> conflict, and the whole transaction rolls back
           8. insert pending_manager_review (status_set_by='assistant'), mark proposal confirmed
         """
-        with self.pool.connection() as conn, conn.transaction():
+        with self._as_user(employee_id) as conn:
             conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (employee_id,))
             proposal = conn.execute(
                 """

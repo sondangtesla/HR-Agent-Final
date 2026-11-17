@@ -188,10 +188,10 @@ def test_overlap_counts_active_requests_only(repo, status, start, end, expected)
 def test_proposal_round_trip_keeps_owner(repo) -> None:
     proposal = make_proposal("AP-TEST-ROUNDTRIP")
     repo.save_proposal(A, proposal)
-    owner, stored = repo.get_proposal("AP-TEST-ROUNDTRIP")
+    owner, stored = repo.get_proposal(A, "AP-TEST-ROUNDTRIP")
     assert owner == A
     assert stored.model_dump() == proposal.model_dump()
-    assert repo.get_proposal("AP-TEST-MISSING") is None
+    assert repo.get_proposal(A, "AP-TEST-MISSING") is None
 
 
 def test_requests_are_own_and_newest_first(repo) -> None:

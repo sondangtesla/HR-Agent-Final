@@ -94,7 +94,7 @@ def test_valid_request_creates_only_a_proposal(tools: ToolExecutor, repository: 
     )
     assert result["status"] == "ok" and result["requires_confirmation"] is True
     assert re.fullmatch(r"AP-[0-9a-f]{32}", proposal.proposal_id)
-    owner, stored = repository.get_proposal(proposal.proposal_id)
+    owner, stored = repository.get_proposal("EMP-001", proposal.proposal_id)
     assert owner == "EMP-001" and stored.business_days == 2
     assert repository.list_leave_requests("EMP-001") == []  # nothing happens before Konfirmasi
     ttl = proposal.expires_at - datetime.now(timezone.utc)
