@@ -29,6 +29,9 @@ st.title("Asisten Kebijakan HR dan Cuti")
 st.caption("Data dan token pada aplikasi ini sepenuhnya sintetis untuk kebutuhan pembelajaran.")
 
 personas = load_personas(Path(__file__).with_name("demo_personas.json"))
+team_personas = Path(__file__).with_name("demo_personas_team.json")
+if team_personas.exists():  # optional manager personas; without the file the UI is exactly the original
+    personas += load_personas(team_personas)
 persona = st.sidebar.selectbox("Persona demo", personas, format_func=lambda item: item["label"])
 select_persona(st.session_state, persona)
 st.sidebar.caption(persona["scenario"])

@@ -21,7 +21,7 @@ RUN pip install -r requirements.txt
 
 # Only what the services, the seed, the tests, and the evaluator read at runtime.
 # pyproject.toml carries the pytest settings (pythonpath, the `live` marker).
-COPY pyproject.toml app.py ui_contract.py ui_format.py demo_personas.json ./
+COPY pyproject.toml app.py ui_contract.py ui_format.py demo_personas.json demo_personas_team.json ./
 COPY src/ ./src/
 COPY data/ ./data/
 COPY evaluation/ ./evaluation/

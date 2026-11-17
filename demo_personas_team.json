@@ -1,0 +1,4 @@
+[
+  {"employee_id":"EMP-010","label":"Sari — manajer Engineering","scenario":"Tanyakan siapa di tim yang cuti, pengajuan yang menunggu, dan hari dengan banyak anggota tim cuti.","demo_token":"token-sari"},
+  {"employee_id":"EMP-020","label":"Dewi — manajer Finance","scenario":"Bandingkan dengan tim Sari: data tim lain tidak terlihat.","demo_token":"token-dewi"}
+]
