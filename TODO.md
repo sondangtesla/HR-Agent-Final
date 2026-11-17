@@ -227,6 +227,9 @@ Pertanyaan pemandu:
 - [ ] **Demo 5–7 menit.** Done when: latihan dua kali dengan timer, mencakup happy, blocked, dan failure path.
 - [ ] **Uji akhir dari checkout bersih.** Done when: clone baru lulus `submission-checklist.md`.
 - [x] **Cocokkan brief poin 7 dengan kode.** Done when: jika task `hr_api` di Step 8 selesai, brief tetap; jika tidak selesai, poin 7 dikembalikan ke versi “API masih login sebagai `hr_app`”. Selesai 9 Nov: task `hr_api` selesai, brief diperbarui dari “akan diterapkan” menjadi kondisi sekarang.
+- [ ] **Sembunyikan outcome dan trace ID dari UI pegawai (sesi terpisah).** Done when: `app.py` tidak lagi menampilkan baris `Outcome: … · Trace: …`; API tetap mengirim `outcome` dan `trace_id` (brief.md:37); endpoint trace tetap bisa dibaca pemilik dan admin (brief.md:40); test UI tetap hijau dan evaluasi tetap GO.
+- [ ] **Rapikan duplikasi di `src/agent.py` (sesi terpisah).** (1) Dua cabang `elif run.searched and not citations` (sekitar baris 275–278) identik, jadi yang kedua tidak pernah jalan. (2) Kunci `"unsupported_numbers"` ditulis dua kali di dict trace (sekitar baris 354, satu baris dengan `number_context_mismatch`). Done when: tinggal satu cabang dan satu kunci, perilaku tidak berubah, dan `pytest -m "not live"` tetap hijau.
+- [ ] **Catat batas penyamaran medis di risk register (sesi terpisah).** Temuan 13 Nov: `redact()` menyamarkan "lupus" dan "diabetes", tetapi "Gula darah saya tinggi" dan "Saya kena diabetis" lolos. Teksnya terkirim ke provider dan tersimpan di Redis hingga 15 menit; model tetap menolak mencatat; trace tidak menyimpan teks. Done when: `templates/risk-register.csv` memuat risiko ini dengan bukti, dampak, mitigasi sekarang, dan perbaikan untuk produksi; laporan tidak mengklaim semua data medis pasti tersamarkan.
 
 ## Progress log
 

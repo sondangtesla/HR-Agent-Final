@@ -274,8 +274,6 @@ class AgentService:
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "search_failed"
             elif run.searched and not citations:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
-            elif run.searched and not citations:
-                outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             elif unsupported and s.answer_number_check == "enforce":
                 # K34: e.g. "15 hari [HR-LEAVE-001]" when the document says 12. The citation is
                 # valid, the number is not. The valid citations stay, so the user can read the source.
@@ -351,7 +349,7 @@ class AgentService:
             # K34: numbers the model stated without evidence (also recorded in "shadow" mode).
             "unsupported_numbers": unsupported_numbers or [],
             # K34 follow-up (shadow): numbers taken from the wrong policy clause; recorded, never blocks.
-            "number_context_mismatch": number_context_mismatch or [],"unsupported_numbers": unsupported_numbers or [],
+            "number_context_mismatch": number_context_mismatch or [],
             "retrieved_documents": retrieved,
             "search_rankings": search_rankings,
             "cited_documents": [c.document_id for c in citations],
