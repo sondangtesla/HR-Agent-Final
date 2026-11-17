@@ -379,6 +379,25 @@ def test_a_managers_dated_team_question_is_answered_not_abstained(repository: Me
     assert trace["stop_reason"] == "completed" and trace["unsupported_numbers"] == []
 
 
+def test_a_team_answer_is_kept_when_the_model_also_searched_policy(repository: MemoryRepository) -> None:
+    """Live evaluation, manager-coverage-020: the model searched policy for "30%", then used the team
+    tool. Without a citation the no_citation rule replaced a correct team answer with an abstain."""
+    add_team_leave(repository)
+    coverage = ModelToolCall(call_id="t1", name="get_team_leave_analytics",
+                             arguments={"metric": "coverage_risk", "start_date": "2026-12-01", "end_date": "2026-12-31"})
+    provider = ScriptedProvider([
+        tool_turn([search_call()]),
+        tool_turn([coverage]),
+        text_turn("Pada 2026-12-02 dan 2026-12-03, 50% tim cuti: Citra Lestari dan Dimas Saputra."),
+    ])
+    response = make_agent(repository, provider).run(
+        ChatRequest(message="Hari apa di Desember 2026 yang 30% atau lebih tim saya cuti?"), SARI
+    )
+    assert response.outcome == "answered"
+    assert "Citra Lestari" in response.answer  # the team answer reaches the manager
+    assert repository.get_trace(response.trace_id)["stop_reason"] == "completed"
+
+
 def test_an_employee_who_claims_to_be_a_manager_gets_no_team_data(repository: MemoryRepository) -> None:
     """The role comes from the token. A refused team call does not excuse an unperformed request."""
     add_team_leave(repository)

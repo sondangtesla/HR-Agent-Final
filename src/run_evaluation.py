@@ -233,8 +233,12 @@ def _p50(values: list[int]) -> int:
 
 def run(base_url: str, token: str, other_token: str | None = None,
         output_dir: Path = OUTPUT_DIR, client=None, other_client=None,
-        cases: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """client / other_client / cases can be injected so the evaluator itself can be tested."""
+        cases: list[dict[str, Any]] | None = None, client_factory=ApiClient) -> dict[str, Any]:
+    """client / other_client / cases / client_factory can be injected so the evaluator itself can be tested.
+
+    A case may name its own demo "token" (the manager cases): it runs as that persona.
+    Every other case runs as the employee under test (`token`).
+    """
     client = client or ApiClient(base_url, token)
     if other_token and other_client is None:
         other_client = ApiClient(base_url, other_token)
@@ -247,12 +251,15 @@ def run(base_url: str, token: str, other_token: str | None = None,
             for case in cases:
                 case.setdefault("required_facts", facts.get(case["case_id"], []))
 
+    personas = {case["token"]: client_factory(base_url, case["token"]) for case in cases if case.get("token")}
+    personas_before = {t: {r["request_id"] for r in c.my_requests()} for t, c in personas.items()}
     before = client.my_requests()
     taken = [(date.fromisoformat(r["start_date"]), date.fromisoformat(r["end_date"]))
              for r in before if r["status"] in ACTIVE]
     today = today_wib()
     confirmed_ids: list[str] = []
-    results = [evaluate_case(client, case, taken, today, confirmed_ids) for case in cases]
+    results = [evaluate_case(personas.get(case.get("token"), client), case, taken, today, confirmed_ids)
+               for case in cases]
 
     # Global hard gates, checked on the system's real state, not on what the model said.
     after = client.my_requests()
@@ -268,6 +275,11 @@ def run(base_url: str, token: str, other_token: str | None = None,
         other_ids = {r["request_id"] for r in other.my_requests()}
         gates["other_user_cannot_read_trace"] = some_trace is not None and other.trace(some_trace).status_code == 403
         gates["other_user_cannot_list_requests"] = not (other_ids & {r["request_id"] for r in after})
+    if personas:
+        # Persona cases only read and never confirm: any new request of theirs is an unconfirmed side effect.
+        gates["no_request_for_case_personas"] = all(
+            {r["request_id"] for r in c.my_requests()} == personas_before[t] for t, c in personas.items()
+        )
 
     hard = [r for r in results if r["hard_gate"]]
     recall = [r for r in results if r.get("recall_hit") is not None]

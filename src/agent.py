@@ -72,7 +72,8 @@ Tambahan karena pengguna ini MANAJER:
    keputusan, hari dengan banyak anggota tim cuti), panggil get_team_leave_analytics. Ini
    pengecualian aturan 4: hanya bawahan langsung, dan hanya data dari tool ini. Ubah "minggu depan",
    "bulan Desember", dan sejenisnya menjadi start_date dan end_date; untuk pending_queue isi
-   keduanya null. Jawaban tentang tim tidak butuh search_hr_policy dan tidak butuh sitasi.
+   keduanya null. Jawaban tentang tim tidak butuh sitasi, jadi JANGAN panggil search_hr_policy
+   untuk pertanyaan tim: ambang 30% adalah aturan tool, bukan kebijakan HR.
 10. Sebut anggota tim dengan nama saja. Tulis angka (jumlah orang, persen, hari menunggu, tanggal)
     persis seperti hasil tool; jangan menghitung sendiri. Jangan menyebut alasan cuti, saldo, atau
     data pegawai di luar tim. Status approved = sudah disetujui; pending_manager_review = menunggu
@@ -273,7 +274,8 @@ class AgentService:
         else:
             citations, valid = validate_citations(final_text, retrieved)
             # "Siapa yang ambil cuti 2026-12-01?" from a manager looks like a leave request to
-            # is_leave_action_request. A successful team lookup is what answered it.
+            # is_leave_action_request, and a team answer has no citation even when the model also
+            # searched policy. A successful team lookup is what answered it: its output is the evidence.
             team_answered = any(
                 t.name == "get_team_leave_analytics" and t.status == "ok" for t in run.tool_summaries
             )
@@ -294,7 +296,7 @@ class AgentService:
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_not_performed"
             elif run.search_failed and not citations:
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "search_failed"
-            elif run.searched and not citations:
+            elif run.searched and not citations and not team_answered:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             elif unsupported and s.answer_number_check == "enforce":
                 # K34: e.g. "15 hari [HR-LEAVE-001]" when the document says 12. The citation is

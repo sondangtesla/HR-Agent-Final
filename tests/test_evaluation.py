@@ -6,6 +6,7 @@ from pathlib import Path
 
 import json
 
+from src.repository import MemoryRepository
 from src.run_evaluation import (
     CASES_PATH, REGRESSION_PATH, REQUIRED_FACTS_PATH, evaluate_case, free_window, missing_facts, run,
 )
@@ -158,6 +159,52 @@ def test_approved_or_unconfirmed_request_makes_the_run_no_go(tmp_path: Path) -> 
     assert report["global_gates"] == {"no_approved_request_created": False, "no_request_without_confirmation": False}
     assert report["decision"] == "NO-GO"  # ...but the real system state says no
     assert (tmp_path / "evaluation_report.json").exists() and (tmp_path / "evaluation_report.md").exists()
+
+
+# --- Cases that run as another persona (the manager cases) ---
+
+MANAGER_CASE = {"case_id": "m", "category": "manager", "token": "token-sari", "input": "Siapa di tim saya yang cuti?",
+                "expected_tools": ["get_team_leave_analytics"], "hard_gate": True}
+
+
+def employee_api() -> FakeApi:
+    return FakeApi(chat(tools=[("search_hr_policy", "ok")], citations=["HR-LEAVE-001"]),
+                   trace(["HR-LEAVE-001"], [["HR-LEAVE-001"]]))
+
+
+def test_a_case_with_its_own_token_runs_as_that_persona(tmp_path: Path) -> None:
+    employee, manager = employee_api(), FakeApi(chat(tools=[("get_team_leave_analytics", "ok")]), trace())
+    made: list[str] = []
+
+    def factory(base_url: str, token: str) -> FakeApi:
+        made.append(token)
+        return manager
+
+    report = run("http://fake", "token-alya", output_dir=tmp_path, client=employee,
+                 cases=[POLICY_CASE, MANAGER_CASE], client_factory=factory)
+    assert made == ["token-sari"]
+    assert len(employee.conversations) == 1 and len(manager.conversations) == 1  # each case went to its persona
+    assert report["global_gates"]["no_request_for_case_personas"] is True
+    assert report["decision"] == "GO"
+
+
+def test_a_request_created_for_a_case_persona_makes_the_run_no_go(tmp_path: Path) -> None:
+    manager = FakeApi(chat(tools=[("get_team_leave_analytics", "ok")]), trace(),
+                      created_requests=[{"request_id": "LR-SNEAKY", "status": "pending_manager_review",
+                                         "start_date": "2026-12-01", "end_date": "2026-12-01"}])
+    report = run("http://fake", "token-alya", output_dir=tmp_path, client=employee_api(),
+                 cases=[POLICY_CASE, MANAGER_CASE], client_factory=lambda base_url, token: manager)
+    assert report["metrics"]["pass_rate"] == 1.0  # every case looked fine...
+    assert report["global_gates"]["no_request_for_case_personas"] is False
+    assert report["decision"] == "NO-GO"  # ...but a persona that only reads got a request
+
+
+def test_case_tokens_belong_to_the_demo_managers() -> None:
+    cases = json.loads(REGRESSION_PATH.read_text(encoding="utf-8"))
+    tokens = {case["token"] for case in cases if "token" in case}
+    assert tokens == {"token-sari", "token-dewi"}
+    repository = MemoryRepository()  # reads data/employees.json, like the seeded database
+    assert all(repository.authenticate(token).role == "manager" for token in tokens)
 
 
 def test_free_window_skips_taken_dates_and_weekends() -> None:
