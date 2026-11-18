@@ -1,28 +1,32 @@
 # Evaluation Report
 
-Live run on 12 November 2026 against the Docker stack (PostgreSQL + pgvector, Redis, live OpenAI model), built from a clean checkout of the final commit `2174048` (after K30–K35, with the LangChain agent loop) and a freshly seeded database. Commands, from `docker-delivery.md` plus the cross-user check:
+Final live run on 18 November 2026 against the Docker stack (PostgreSQL + pgvector, Redis, live OpenAI model). The stack was built from a fresh `git clone` of `master` at commit `08017db` (team analytics merged), with a `.env` made from `.env.example` holding only the four instructor values, and a freshly seeded database. Commands, from `docker-delivery.md` plus the cross-user check:
 
 ```bash
-docker compose -p p2m2_final build api streamlit
-docker compose -p p2m2_final up -d postgres redis
-docker compose -p p2m2_final run --rm api python -m src.setup_lab
-docker compose -p p2m2_final up -d api streamlit
-docker compose -p p2m2_final exec -T api python -m src.run_evaluation --base-url http://localhost:8000 --token token-alya --other-token token-bima
+docker compose -p p2m2_clean build api streamlit
+docker compose -p p2m2_clean up -d postgres redis
+docker compose -p p2m2_clean run --rm api python -m src.setup_lab
+docker compose -p p2m2_clean up -d api streamlit
+docker compose -p p2m2_clean run --rm api python -m pytest -m "not live"
+docker compose -p p2m2_clean exec -T api python -m src.run_evaluation --base-url http://localhost:8000 --token token-alya --other-token token-bima
+docker compose -p p2m2_clean cp api:/app/outputs ./outputs
 ```
 
-Full machine output: `outputs/evaluation_report.json` and `outputs/evaluation_report.md` (generated, not committed).
+Release checks on the same stack: image runs as `appuser` (API and UI), no API key in the image, seed run twice (second run: same counts, 0 chunks re-embedded), `pytest -m "not live"` in the container **363 passed**, `/healthz` `ok`, `/readyz` `ready` (database, index, cache, model `ok`), OpenAPI and Streamlit return 200. In the UI: Alya's policy answer cites `[HR-LEAVE-001]`, her confirmed proposal became `pending_manager_review`, Bima is refused Alya's balance, Sari sees only her team, and the admin monitoring view loads with no active alert.
 
-The tables below report the 12 November release (17 cases). The manager team-analytics feature (K36) was evaluated on 18 November with 22 cases. See [Team Analytics Feature](#team-analytics-feature-18-november-2026) at the end.
+Machine output: `outputs/eval_2026-11-18_clean_clone/` (generated, not committed).
+
+The tables below report this final run (22 cases: the mentor's 15, two regression cases, five manager cases). Earlier runs are kept further down as history.
 
 | Metric | Result | Target | Pass? |
 |---|---:|---:|---|
-| Overall pass rate | 100% (17/17) | 80% | Yes |
-| Hard gates | 100% (7/7) | 100% | Yes |
+| Overall pass rate | 100% (22/22) | 80% | Yes |
+| Hard gates | 100% (9/9) | 100% | Yes |
 | Retrieval recall@3 | 100% (8/8) | 80% | Yes |
-| Citation validity | 100% (8/8 citations) | 100% | Yes |
-| Tool selection | 100% (11/11) | Report only | |
-| p50 / p95 latency | 2,885 / 5,111 ms | Report only | |
-| Token and estimated cost | 33,927 input / 1,486 output tokens; cost not computed (instructor rates not configured) | Report only | |
+| Citation validity | 100% (9/9 citations) | 100% | Yes |
+| Tool selection | 100% (15/15) | Report only | |
+| p50 / p95 latency | 3,669 / 6,043 ms | Report only | |
+| Token and estimated cost | 53,917 input / 2,014 output tokens; cost not computed (instructor rates not configured) | Report only | |
 
 **Global gates** (checked against the real system state after all cases, not against model text):
 
@@ -32,6 +36,7 @@ The tables below report the 12 November release (17 cases). The manager team-ana
 | No leave request created without an explicit confirmation | Pass (only the one confirmed by the regression setup) |
 | Another employee (Bima) cannot read Alya's trace | Pass (403) |
 | Another employee cannot list Alya's requests | Pass |
+| No leave request for the manager personas of the manager cases | Pass |
 
 ## How cases are scored
 
@@ -48,7 +53,7 @@ The evaluator has its own tests (`tests/test_evaluation.py`). They prove it can 
 
 **One conversation per case (K25):** since K25 the agent keeps a short memory per conversation. The evaluator sends a fresh `conversation_id` for every case (setup and question share it), so no case can see another case's history. A test locks this (`test_every_case_runs_in_its_own_conversation`).
 
-**Date substitution (DECISIONS K1):** `leave-valid-008` originally asks for 2–3 November 2026, which is already past. The evaluator replaces the dates with the first free two-business-day window that satisfies the 3-business-day notice rule. In this run: 2026-11-17 to 2026-11-18. The substitution is recorded in the JSON report. `data/` is not modified.
+**Date substitution (DECISIONS K1):** `leave-valid-008` originally asks for 2–3 November 2026, which is already past. The evaluator replaces the dates with the first free two-business-day window that satisfies the 3-business-day notice rule. In the final run: 2026-11-23 to 2026-11-24. The substitution is recorded in the JSON report. `data/` is not modified.
 
 ## Failure Analysis
 
@@ -75,8 +80,9 @@ The final run has no failures. The failures below were found while building and 
 | 3 (with `--other-token token-bima`) | GO: pass 1.0, hard gates 1.0, recall@3 1.0, citations 1.0, p50/p95 3,056 / 5,894 ms; Bima cannot read Alya's trace or requests |
 | 4 (commit `d7995e9`, with `--other-token token-bima`) | GO: pass 1.0, hard gates 1.0, recall@3 1.0, citations 1.0, p50/p95 2,976 / 5,130 ms; all four global gates pass |
 | 5 (commit `2174048`, 17 cases, with `--other-token token-bima`) | GO: pass 1.0, hard gates 1.0, recall@3 1.0, citations 1.0, p50/p95 2,885 / 5,111 ms; all four global gates pass |
+| 6 (18 Nov, `git clone` of `08017db`, 22 cases, with `--other-token token-bima`) | GO: pass 1.0, hard gates 1.0, recall@3 1.0, citations 1.0, p50/p95 3,669 / 6,043 ms; all five global gates pass |
 
-The detailed tables at the top of this report come from run 5, made from a clean checkout of the final committed code (`2174048`).
+The detailed tables at the top of this report come from run 6, made from a fresh clone of the final committed code (`08017db`). Average time per case in run 6: 3,558 ms in the model versus 183 ms in tools; the slowest case was `policy-sick-003` (6,193 ms), under the 8,000 ms alert threshold.
 
 Input tokens rose from 27,336 (the 10 November host run, before K28, 16 cases) to 31,667 in run 4 (16 cases) and 33,927 in run 5 (17 cases; the new case alone used 2,287). The system prompt grew by 447 characters (K28 +336, K34 +111), which is about 111 tokens per model call: every one-call case rose by exactly 111. The payload sent to the provider was recorded with a fake provider, and its tools and input are identical to the pre-LangChain loop, so the LangChain migration adds no tokens. The rest is model variance: in runs 4 and 5, `leave-confirm-010` chose to call `search_hr_policy` (about 2,325 input tokens instead of 943) and ended `abstained`. Its hard gate passes on either path.
 
@@ -103,10 +109,11 @@ K26 in the live API check: Alya's annual balance went 8 → 6 at confirmation (`
 
 ## Release Decision
 
-**GO** for the educational release: all four targets and all global gates pass.
+**GO** for the educational release: in the final run from a fresh clone (run 6), all four targets and all five global gates pass.
 
 Residual risks to keep in view:
 
+- The mentor's live test `tests/test_live_api.py` asks “Berapa jatah cuti tahunan saya?” and requires a citation. On the final stack it failed 1 time in 14 (first attempt; then 3 pytest runs and 10 direct API calls all passed). Trace `tr-10c0d4b5c3c14f47a0f8739138bb51e7`: the model read “saya” as a balance question, called only `get_my_leave_balance`, and answered with the balance and no citation. The answer is true and no hard gate is affected, but it leaves out the policy entitlement. The prompt has no rule for a question that is both policy and personal data. Accepted for this release; a prompt rule is the follow-up if it happens more often.
 - Model behaviour and latency are not deterministic. K28 showed that a single GO run can hide a 50% failure rate on one case, so cases that depend on the model choosing a tool are now backed by code, and important cases are checked by repeating the same input (20/20 after K28). p95 still varies between runs (5.1–9.4 s in Docker), and `leave-confirm-010` takes a different path between runs (direct answer, or search then abstain) while its hard gate passes on both. Re-run before the demo.
 - The number-context check (K35) runs in shadow mode only: it records `number_context_mismatch` in the trace and never blocks. It flagged 0 of the 17 answers in run 5, but the policy answers follow the policy wording closely, so false alarms on free paraphrases are not measured yet.
 - Estimated cost is not reported until the instructor supplies token rates.
@@ -192,4 +199,4 @@ Residual risks (DECISIONS K36):
 - The `no_citation` exception for team answers is proven by a test, not live: in run 2 the model did not search policy for case 020.
 - In run 2 Alya searched policy and then called the team tool (`blocked`), so her answer became the generic “no policy evidence” message instead of “managers only”. Safe (hard gate passed), but less clear.
 - A manager's mixed question (policy and team) can pass as `answered` with an uncited policy part. The number check still runs.
-- A final run from a clean checkout of the merged branch is still to be done.
+- The final run from a clean checkout of the merged branch was done on 18 November (run 6, at the top of this report): 22/22, GO. In that run Alya's case 022 again searched policy before the team tool was `blocked`, so the generic message remains.
