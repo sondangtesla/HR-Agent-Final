@@ -129,6 +129,7 @@ Token salah → 401. Monitoring atau trace orang lain → 403. Proposal milik or
 | Bukti | Lokasi |
 |---|---|
 | Laporan evaluasi (metrik, hard gate, GO/NO-GO) | [templates/evaluation-report.md](templates/evaluation-report.md) |
+| Screenshot UI dan monitoring, hasil test, backup output evaluasi | [docs/screenshots/](docs/screenshots/README.md) |
 | Risk register | [templates/risk-register.csv](templates/risk-register.csv) |
 | Project brief | [templates/project-brief.md](templates/project-brief.md) |
 | Diagram dan ADR | [templates/architecture.md](templates/architecture.md) |

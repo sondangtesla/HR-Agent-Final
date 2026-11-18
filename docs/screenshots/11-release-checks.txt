@@ -1,0 +1,22 @@
+# Release checks, Docker stack built from a fresh git clone of commit 08017db (project p2m2_clean)
+# Captured 2026-11-18T10:30Z
+
+$ curl -fsS http://localhost:8000/healthz
+{"status":"ok"}
+
+$ curl -fsS http://localhost:8000/readyz
+{"status":"ready","checks":{"database":"ok","index":"ok","cache":"ok","model":"ok"}}
+
+$ docker compose -p p2m2_clean exec -T api whoami
+appuser
+$ docker compose -p p2m2_clean exec -T streamlit whoami
+appuser
+
+$ docker compose -p p2m2_clean run --rm api python -m pytest -m "not live" -q
+........................................................................ [ 19%]
+........................................................................ [ 39%]
+........................................................................ [ 59%]
+........................................................................ [ 79%]
+........................................................................ [ 99%]
+...                                                                      [100%]
+363 passed, 1 deselected in 5.87s
