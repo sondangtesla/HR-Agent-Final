@@ -183,7 +183,7 @@ Manajer bisa bertanya tentang cuti **bawahan langsungnya** lewat chat yang sama.
 | Query | `WHERE e.manager_id = ...`, hanya status aktif, periode maksimal 31 hari | `list_team_requests` |
 | Database | RLS `api_read`: baris milik sendiri atau milik bawahan langsung | `src/setup_lab.py` |
 | Hasil | Hanya nama, jenis cuti, tanggal, status, dan angka hasil hitungan tool. Tanpa ID, alasan, atau saldo | `team_leave_row` |
-| Prompt | Aturan 9–11 hanya untuk role `manager`. Prompt pegawai biasa tidak berubah | `MANAGER_INSTRUCTIONS` |
+| Prompt | Aturan 10–12 hanya untuk role `manager`. Prompt pegawai biasa tidak berubah | `MANAGER_INSTRUCTIONS` |
 
 Tiga metrik tetap: `team_absence` (siapa cuti dalam periode), `pending_queue` (pengajuan menunggu, paling lama di atas), dan `coverage_risk` (hari kerja dengan ≥ 30% tim cuti). Asisten tetap tidak bisa menyetujui atau menolak cuti.
 

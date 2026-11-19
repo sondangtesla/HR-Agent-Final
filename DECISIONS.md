@@ -984,7 +984,7 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 - **RLS di tiga tabel inti.** `leave_requests` bisa dibaca kalau barisnya milik sendiri atau milik bawahan langsung, dan hanya boleh ditulis untuk diri sendiri. `leave_balances` dan `action_proposals` hanya milik sendiri (`FOR ALL`). Identitas dikirim lewat `set_config('app.employee_id', %s, true)` di helper `PostgresRepository._as_user`, sekali per transaksi. Nilainya hilang saat transaksi selesai, jadi pemakai berikutnya dari pool tidak mewarisinya. Tanpa identitas, `current_setting(..., true)` bernilai NULL dan `hr_api` tidak melihat satu baris pun (gagal tertutup). Tanda tangan method repository tetap `employee_id: str`.
 - **Query tim.** `count_team_members` dan `list_team_requests` di kedua repository. Yang diambil hanya status aktif, dengan filter periode yang beririsan. `WHERE e.manager_id = ...` memilih tim di kode, lalu RLS memeriksanya lagi.
 - **Tool kelima `get_team_leave_analytics(metric, start_date, end_date)`** dengan tiga metrik tetap: `team_absence`, `pending_queue`, `coverage_risk` (hari kerja dengan ≥ 30% tim cuti). Tim diambil dari token, tidak pernah dari argumen. Non-manajer mendapat `blocked`. Periode wajib untuk dua metrik pertama, paling lama 31 hari. Kalau `pending_queue` diberi tanggal, permintaan ditolak, bukan diabaikan diam-diam. Semua angka dihitung oleh fungsi murni: ambang dibandingkan dengan bilangan bulat (`orang × 100 ≥ 30 × tim`), dan persen dibulatkan ke atas mulai 0,5. Hasil tool hanya memuat nama: tanpa ID pegawai, ID pengajuan, alasan, atau saldo.
-- **Prompt.** Aturan 9–11 (`MANAGER_INSTRUCTIONS`) hanya ditambahkan kalau `auth.role == "manager"`. Prompt pegawai biasa tetap persis sama.
+- **Prompt.** Aturan 10–12 (`MANAGER_INSTRUCTIONS`) hanya ditambahkan kalau `auth.role == "manager"`. Prompt pegawai biasa tetap persis sama.
 - **Outcome.** Cabang `action_not_performed` dan `no_citation` dilewati hanya kalau tool tim dipanggil dengan status `ok` (`team_answered`). Alasannya, pertanyaan manajer seperti "siapa yang ambil cuti 2026-12-01" terlihat seperti permintaan cuti, dan jawaban tim memang tidak bersitasi.
 - **UI.** Persona manajer ada di file terpisah `demo_personas_team.json`. `app.py` menambahkannya kalau file itu ada, dan `Dockerfile` ikut menyalinnya. `demo_personas.json` dan test mentor tidak disentuh.
 - **Evaluator.** Sebuah kasus boleh membawa `"token"` persona. Gate global baru `no_request_for_case_personas`: persona yang hanya membaca tidak boleh punya pengajuan baru.
@@ -1011,7 +1011,7 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 - Test baru di `tests/test_agent.py` memutar ulang kegagalan live di bawah. Test itu merah tanpa perbaikan dan hijau dengan perbaikan.
 - Evaluasi live di stack Docker terpisah `p2m2_feat` (seed baru, `pytest` di container 353 passed):
   - **run 1: GO 21/22.** `manager-coverage-020` gagal: model mencari kebijakan karena "30%", lalu cabang `no_citation` mengganti jawaban tim yang benar dengan abstain.
-  - **Perbaikan:** pengecualian `team_answered` di cabang `no_citation`, ditambah satu kalimat di aturan 9: "ambang 30% adalah aturan tool, bukan kebijakan HR".
+  - **Perbaikan:** pengecualian `team_answered` di cabang `no_citation`, ditambah satu kalimat di aturan 9 (sejak 18 Nov menjadi aturan 10): "ambang 30% adalah aturan tool, bukan kebijakan HR".
   - **run 2: GO 22/22**, hard gates 9/9, kelima gate global lulus.
   - 17 kasus lama lulus di kedua run.
 
