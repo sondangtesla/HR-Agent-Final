@@ -331,7 +331,7 @@ def test_a_question_that_mentions_a_date_is_still_answered(repository: MemoryRep
 
 # --- Manager: team prompt and team questions ---
 
-SARI = AuthContext(employee_id="EMP-010", display_name="Sari Wijaya", role="manager")
+SARI = AuthContext(employee_id="EMP-010", display_name="Sari Wijaya", role="manager", department="Engineering")
 
 
 def team_absence_call(start: str, end: str) -> ModelToolCall:
@@ -361,6 +361,7 @@ def test_only_a_manager_gets_the_team_rules_in_the_prompt(repository: MemoryRepo
     instructions = manager.calls[0]["instructions"]
     assert instructions.startswith(SYSTEM_INSTRUCTIONS.format(today="2026-09-23", display_name="Sari Wijaya"))
     assert "MANAJER" in instructions and "get_team_leave_analytics" in instructions
+    assert "manajer departemen Engineering" in instructions  # rule 13, department from the token (R-014)
 
 
 def test_a_managers_dated_team_question_is_answered_not_abstained(repository: MemoryRepository) -> None:

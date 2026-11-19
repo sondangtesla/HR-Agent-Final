@@ -175,8 +175,8 @@ def test_ticket_tool_refuses_an_empty_summary(tools: ToolExecutor, repository: M
 # Teams come from data/employees.json: Sari (EMP-010) manages Alya, Bima, Citra, Dimas (4 people);
 # Dewi (EMP-020) manages Eka, Fajar, Gita (3 people). December 2026: the 5th and 6th are a weekend.
 
-SARI = AuthContext(employee_id="EMP-010", display_name="Sari Wijaya", role="manager")
-DEWI = AuthContext(employee_id="EMP-020", display_name="Dewi Anggraini", role="manager")
+SARI = AuthContext(employee_id="EMP-010", display_name="Sari Wijaya", role="manager", department="Engineering")
+DEWI = AuthContext(employee_id="EMP-020", display_name="Dewi Anggraini", role="manager", department="Finance")
 
 
 def add_team_request(repository: MemoryRepository, owner: str, start: date, end: date, days: int, status: str,
@@ -299,3 +299,15 @@ def test_team_results_show_names_only(tools: ToolExecutor, team: MemoryRepositor
     assert "EMP-" not in text and "LR-" not in text  # no employee or request IDs
     for hidden in ("reason", "balance", "available"):
         assert hidden not in text
+
+
+def test_team_results_name_the_managers_department(tools: ToolExecutor, team: MemoryRepository) -> None:
+    """R-014: the model must know which department the rows belong to, for every metric."""
+    for auth, department in ((SARI, "Engineering"), (DEWI, "Finance")):
+        results = [
+            team_call(tools, auth, "team_absence", "2026-12-01", "2026-12-31"),
+            team_call(tools, auth, "pending_queue", None, None),
+            team_call(tools, auth, "coverage_risk", "2026-12-01", "2026-12-31"),
+        ]
+        assert [r["team_department"] for r in results] == [department] * 3
+    assert "team_department" not in team_call(tools, ALYA, "pending_queue", None, None)  # blocked: no team

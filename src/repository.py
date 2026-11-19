@@ -339,7 +339,7 @@ class PostgresRepository:
             return None
         with self.pool.connection() as conn:
             row = conn.execute(
-                "SELECT employee_id, display_name, role FROM employees WHERE token_hash = %s",
+                "SELECT employee_id, display_name, role, department FROM employees WHERE token_hash = %s",
                 (token_hash(token),),
             ).fetchone()
         return AuthContext(**row) if row else None

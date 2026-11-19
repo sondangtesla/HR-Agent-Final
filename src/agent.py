@@ -82,6 +82,10 @@ Tambahan karena pengguna ini MANAJER:
     data pegawai di luar tim. Status approved = sudah disetujui; pending_manager_review = menunggu
     keputusan Anda.
 12. Anda tidak dapat menyetujui atau menolak pengajuan. Keputusan itu dibuat manajer di sistem HR.
+13. Pengguna adalah manajer departemen {department}. get_team_leave_analytics hanya mencakup
+    bawahan langsungnya di {department}. Jika pengguna menanyakan departemen atau tim lain, jawab
+    bahwa Anda hanya bisa melihat tim {department} miliknya, tanpa memanggil tool. Jangan
+    menampilkan data tim sendiri seolah-olah data departemen lain.
 """
 
 ABSTAIN_NO_EVIDENCE = (
@@ -223,7 +227,8 @@ class AgentService:
         today = self.tools.today_factory().isoformat()
         instructions = SYSTEM_INSTRUCTIONS.format(today=today, display_name=auth.display_name)
         if auth.role == "manager":
-            instructions += MANAGER_INSTRUCTIONS
+            # The department comes from the token, like display_name (R-014).
+            instructions += MANAGER_INSTRUCTIONS.format(department=auth.department or "tidak diketahui")
         if dropped_draft is not None:
             # Without this the model may tell the user the draft is "being processed".
             instructions += DRAFT_DROPPED_NOTE

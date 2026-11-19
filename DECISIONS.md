@@ -1026,6 +1026,28 @@ Hasilnya: chat saat database mati → 503 dalam 5 detik, dan pulih **5 detik** s
 
 **Tindak lanjut produksi:** daftar tool per role, supaya tool tim hanya dikirim untuk manajer. Ini menutup risiko 1 dan 3, tetapi `lc_agent.py` perlu memfilter tool per run.
 
+## K37 — Hasil tool tim menyebut departemen manajer
+
+**Status:** Diputuskan (19 Nov 2026).
+
+**Temuan:** Sari (Engineering) bertanya "Siapa di tim Finance yang cuti Desember 2026?" dan dijawab dengan Alya, Citra, dan Dimas. Data tidak bocor, tetapi jawabannya menyesatkan: hasil tool tidak memuat departemen, jadi model tidak tahu bahwa baris itu tim Engineering (R-014).
+
+**Opsi:**
+- (A) Hanya prompt dan `TEAM_NOTE`. Kecil, tetapi model tetap tidak tahu departemen manajer, jadi pertanyaan tentang "tim Engineering" bisa ikut ditolak.
+- (B1) Method repository baru `get_department`, dan hasilnya dimasukkan ke hasil tool. Model baru tahu departemen setelah memanggil tool, dan ada satu query tambahan.
+- (B2) Departemen menjadi bagian dari identitas: `authenticate` sudah membaca baris `employees` di setiap request, jadi `department` cukup ditambahkan ke query itu dan ke `AuthContext`.
+- (C) Argumen `department` di tool, lalu dicocokkan dengan `auth.department` di kode. Deterministik, tetapi tetap bolong kalau model tidak mengisi argumennya, dan menambah schema sehari sebelum pengumpulan. Lebih cocok untuk proyek HR analyst.
+
+**Keputusan:** B2.
+- `AuthContext.department` (opsional, default `None`). Query `authenticate` di `PostgresRepository` ikut membaca `department`. `MemoryRepository` mendapatkannya lewat `AuthContext.model_validate(row)` dari `data/employees.json`.
+- Aturan 13 di `MANAGER_INSTRUCTIONS` diisi dari `auth.department`, seperti `display_name` di prompt dasar. Kalau pengguna menanyakan departemen lain, model menjawab bahwa hanya tim departemennya sendiri yang terlihat, tanpa memanggil tool.
+- `_get_team_leave_analytics` menambahkan `"team_department": auth.department` ke ketiga metrik lewat `_with_team_department`, tanpa query. Hasil `blocked` tidak berubah.
+- Kasus evaluasi `manager-other-dept-023` (bukan hard gate): jawaban harus memuat "Engineering" dan tidak memuat nama anggota tim mana pun.
+
+**Alasan:** model tidak pernah memegang identitas; kode harus menempelkan departemen ke teks yang dilihat model. Di prompt, model tahu departemennya tanpa harus memanggil tool dulu. Tidak ada query, method repository, atau argumen tool baru.
+
+**Risiko:** model bisa mengabaikan aturan 13 (prompt bukan jaminan). Tidak ada risiko kebocoran baru, karena departemen yang dibaca hanya milik pengguna sendiri. Diuji di evaluasi live 20 Nov bersama perubahan aturan 7 dan 9 (commit `6639095`).
+
 ## Temuan kecil
 
 Temuan berikut tidak memerlukan keputusan besar.

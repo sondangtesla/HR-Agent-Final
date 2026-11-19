@@ -18,6 +18,7 @@ class AuthContext(BaseModel):
     employee_id: str
     display_name: str
     role: Literal["employee", "monitoring_admin", "manager"] = "employee"
+    department: str | None = None  # from the employees row, like role; never from the message
 
 
 class ChatRequest(BaseModel):

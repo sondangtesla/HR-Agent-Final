@@ -349,7 +349,9 @@ class ToolExecutor:
         if args.metric == "pending_queue":
             if start is not None or end is not None:
                 return blocked("pending_queue tidak memakai periode: isi start_date dan end_date dengan null.")
-            return pending_queue(self.repository.list_team_requests(auth.employee_id), self.today_factory()), None
+            return self._with_team_department(
+                pending_queue(self.repository.list_team_requests(auth.employee_id), self.today_factory()), auth
+            ), None
         if start is None or end is None:
             return blocked(f"{args.metric} butuh start_date dan end_date.")
         if end < start:
@@ -360,5 +362,10 @@ class ToolExecutor:
         team_size = self.repository.count_team_members(auth.employee_id)
         requests = self.repository.list_team_requests(auth.employee_id, start, end)
         if args.metric == "team_absence":
-            return team_absence(requests, team_size, start, end), None
-        return coverage_risk(requests, team_size, start, end), None
+            return self._with_team_department(team_absence(requests, team_size, start, end), auth), None
+        return self._with_team_department(coverage_risk(requests, team_size, start, end), auth), None
+
+    def _with_team_department(self, result: dict[str, Any], auth: AuthContext) -> dict[str, Any]:
+        """Name the team's department, so a question about another department is not answered
+        with this team's rows (R-014). The department comes from the token, like the team."""
+        return {**result, "team_department": auth.department}

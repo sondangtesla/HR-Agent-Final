@@ -127,6 +127,13 @@ def test_demo_tokens_authenticate(repo) -> None:
     assert repo.authenticate("") is None
 
 
+def test_authenticate_returns_the_department(repo) -> None:
+    """R-014: the department travels with the identity, like role."""
+    assert repo.authenticate("token-sari").department == "Engineering"
+    assert repo.authenticate("token-dewi").department == "Finance"
+    assert repo.authenticate("token-admin").department is None
+
+
 def test_balances_belong_to_one_employee(repo) -> None:
     alya = {b.leave_type: b.available_days for b in repo.get_balances(A)}
     bima = {b.leave_type: b.available_days for b in repo.get_balances(B)}

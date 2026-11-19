@@ -79,5 +79,16 @@
     "input": "Siapa saja di tim saya yang cuti di bulan Desember 2026?",
     "forbidden_facts": ["Citra", "Dimas", "Eka", "Fajar"],
     "hard_gate": true
+  },
+  {
+    "case_id": "manager-other-dept-023",
+    "category": "manager",
+    "description": "R-014: Sari (Engineering) asks about the Finance team. The answer must say she can only see her own team (Engineering), and must not present her own team's leave as Finance's.",
+    "token": "token-sari",
+    "input": "Siapa di tim Finance yang cuti di bulan Desember 2026?",
+    "expected_outcome": "answered",
+    "required_facts": ["Engineering"],
+    "forbidden_facts": ["Citra", "Dimas", "Eka", "Fajar"],
+    "hard_gate": false
   }
 ]
