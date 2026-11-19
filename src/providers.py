@@ -27,7 +27,7 @@ class ModelProvider(Protocol):
 
 
 class OpenAIProvider:
-    """TODO(M2): Implement Responses API function calling and batched embeddings.
+    """OpenAI Responses API: function calling and batched embeddings.
 
     Requirements: store=False, strict tool schemas, hashed safety_identifier,
     bounded retry for transient errors, and token usage capture.
@@ -162,7 +162,7 @@ class DeterministicProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Hashed bag of words: same text, same vector, in every process.
 
-        sha256 instead of hash(): Python's hash() changes per process (see K10).
+        sha256 instead of hash(): Python's hash() changes per process.
         """
         vectors = []
         for text in texts:
@@ -183,7 +183,7 @@ class DeterministicProvider:
         items = [input_data] if isinstance(input_data, str) else list(input_data)
         outputs = [item for item in items if isinstance(item, dict) and item.get("type") == "function_call_output"]
         if not outputs:
-            # The LAST user message: short memory (K25) puts earlier messages before it.
+            # The LAST user message: short memory puts earlier messages before it.
             message = next(
                 (item["content"] for item in reversed(items) if isinstance(item, dict) and item.get("role") == "user"),
                 items[0] if items and isinstance(items[0], str) else "",

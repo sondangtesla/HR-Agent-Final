@@ -1,8 +1,8 @@
 """Guards that live in PostgreSQL itself, so they hold even when the Python code has a bug.
 
-- K9: CHECK and UNIQUE constraints on leave_requests (run as the table owner).
-- K9 option C: what the API login (hr_api) may and may not do.
-- K26: hr_api may lower a balance but never raise it; HR cancellation refunds the days.
+- CHECK and UNIQUE constraints on leave_requests (run as the table owner).
+- What the API login (hr_api) may and may not do.
+- hr_api may lower a balance but never raise it; HR cancellation refunds the days.
 - Row-level security: hr_api sees only the rows of the user set in app.employee_id (plus a
   manager's direct reports in leave_requests), and nothing at all when no user is set.
 
@@ -85,7 +85,7 @@ def violated_constraint(conn, action) -> str | None:
     return None
 
 
-# --- K9 constraints (as the table owner, so only constraints can stop the write) ---
+# --- Constraints (as the table owner, so only constraints can stop the write) ---
 
 def test_assistant_can_write_pending(owner) -> None:
     setup_proposal(owner)
@@ -130,7 +130,7 @@ def test_unknown_status_and_raw_token_are_rejected(owner) -> None:
     assert violated_constraint(owner, lambda: owner.execute(raw_token)) == "employees_token_hash_check"
 
 
-# --- K9 option C: the API login is not a superuser and cannot approve anything ---
+# --- The API login is not a superuser and cannot approve anything ---
 
 def denied(conn, statement: str) -> bool:
     try:
@@ -181,7 +181,7 @@ def test_api_can_read_what_it_needs(api) -> None:
         api.execute(f"SELECT 1 FROM {table} LIMIT 1")  # constant table names
 
 
-# --- K26: the API may lower a balance, never raise it, and touches nothing else ---
+# --- The API may lower a balance, never raise it, and touches nothing else ---
 
 def annual(conn) -> int:
     return conn.execute(

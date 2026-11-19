@@ -1,4 +1,4 @@
-"""LangChain chat-model adapter around our ModelProvider (K30).
+"""LangChain chat-model adapter around our ModelProvider.
 
 create_agent can only call a LangChain BaseChatModel. Our providers (OpenAI, the deterministic
 fake, and the test doubles) speak ModelProvider.respond() -> ModelTurn. This adapter only
@@ -31,7 +31,7 @@ def to_input_items(messages: list[BaseMessage]) -> list[Any]:
             if OUTPUT_ITEMS in message.additional_kwargs:
                 items.extend(message.additional_kwargs[OUTPUT_ITEMS])  # a turn of this run
             else:
-                items.append({"role": "assistant", "content": message.text})  # short memory (K25)
+                items.append({"role": "assistant", "content": message.text})  # short memory
         elif isinstance(message, ToolMessage):
             items.append({"type": "function_call_output", "call_id": message.tool_call_id,
                           "output": message.text})

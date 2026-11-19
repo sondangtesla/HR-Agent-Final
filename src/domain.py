@@ -19,7 +19,7 @@ def today_wib() -> date:
     return datetime.now(WIB).date()
 
 
-# T7: the rules in this module implement these policy versions. Stored with every proposal
+# The rules in this module implement these policy versions. Stored with every proposal
 # and request; tests/test_domain_rules.py fails if data/policies moves to a new version
 # without this table (and the rules) being reviewed.
 RULE_POLICY_VERSIONS = {
@@ -39,7 +39,7 @@ def leave_type_name(leave_type: str) -> str:
     return LEAVE_TYPE_NAMES.get(leave_type, leave_type)
 
 
-# K3: "paling lambat tiga hari kerja sebelum tanggal mulai" (data/policies/annual-leave.md).
+# Notice period: "paling lambat tiga hari kerja sebelum tanggal mulai" (data/policies/annual-leave.md).
 # The submission day counts: submitted Wednesday -> earliest start is next Monday.
 MIN_NOTICE_BUSINESS_DAYS = 3
 NOTICE_RULE_LEAVE_TYPES = frozenset({"annual"})  # sick leave cannot be planned days ahead
@@ -88,7 +88,7 @@ def validate_leave_request(
 ) -> tuple[int, list[str]]:
     """Check every rule in a fixed order and return (business days, summary).
 
-    `balances` are the stored balances. Since K26 they are already net of every confirmed
+    `balances` are the stored balances. They are already net of every confirmed
     request, so no pending days are subtracted here.
 
     Order matters, and the tests lock it:
@@ -105,7 +105,7 @@ def validate_leave_request(
         raise DomainError(f"Tanggal mulai {start.isoformat()} sudah lewat (masa lalu).")
     # 3. Business days in range
     days = business_days(start, end)
-    # 4. Minimum notice (K3, annual leave only)
+    # 4. Minimum notice (annual leave only)
     if args.leave_type in NOTICE_RULE_LEAVE_TYPES:
         notice = notice_business_days(today, start)
         if notice < MIN_NOTICE_BUSINESS_DAYS:
@@ -117,7 +117,7 @@ def validate_leave_request(
     # 5. Overlap with an active request
     if overlaps:
         raise DomainError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
-    # 6. Balance (K26: already net of confirmed requests)
+    # 6. Balance (already net of confirmed requests)
     balance = next((b for b in balances if b.leave_type == args.leave_type), None)
     if balance is None:
         raise DomainError(f"Saldo cuti {leave_type_name(args.leave_type)} tidak ditemukan.")
@@ -138,7 +138,7 @@ def validate_leave_request(
     return days, summary
 
 
-# --- Leave action requests (K28) ---
+# --- Leave action requests ---
 
 # "Ajukan cuti tahunan 2025-01-02": a leave word, an action verb, and a date. Narrow on purpose:
 # a policy question that mentions a date ("apakah 2026-12-24 libur?") is not an action request.
@@ -152,14 +152,14 @@ ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 def is_leave_action_request(message: str) -> bool:
     """True when the user asks the assistant to prepare a leave request for a given date.
 
-    Used only to label the outcome honestly (K24/K28): if such a request ends without a proposal,
+    Used only to label the outcome honestly: if such a request ends without a proposal,
     nothing was done, whatever the model wrote instead.
     """
     words = set(_words(message))
     return "cuti" in words and bool(words & LEAVE_ACTION_VERBS) and bool(ISO_DATE.search(message))
 
 
-# --- HR ticket rules (K25) ---
+# --- HR ticket rules ---
 
 # Every word of the message must come from these two sets, and at least one must be a
 # confirming word. Strict on purpose: "ya, tapi ganti kategorinya" or "ya kayaknya" is not a

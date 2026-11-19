@@ -1,4 +1,4 @@
-"""T2: the supplied UI sends one conversation_id per browser session."""
+"""The supplied UI sends one conversation_id per browser session."""
 from __future__ import annotations
 
 from pathlib import Path

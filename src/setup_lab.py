@@ -63,10 +63,10 @@ CREATE TABLE IF NOT EXISTS leave_balances (
     updated_at      TIMESTAMPTZ,
     PRIMARY KEY (employee_id, leave_type)
 );
--- T6: CREATE TABLE IF NOT EXISTS does not change an existing table.
+-- CREATE TABLE IF NOT EXISTS does not change an existing table.
 ALTER TABLE leave_balances ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
 
--- K26: only the table owner (the HR system / seed) may RAISE a balance. Every other login,
+-- Only the table owner (the HR system / seed) may RAISE a balance. Every other login,
 -- including hr_api, can only lower it, so even a bug in the API cannot give anyone more leave.
 -- updated_at is set here, not by the application, as the audit trail of every change.
 CREATE OR REPLACE FUNCTION guard_balance_update() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS action_proposals (
     CHECK (end_date >= start_date)
 );
 
--- K9: the assistant may only ever set pending_manager_review.
+-- The assistant may only ever set pending_manager_review.
 -- approved/cancelled are allowed only when written by the HR system or the seed.
 CREATE TABLE IF NOT EXISTS leave_requests (
     request_id       TEXT PRIMARY KEY,
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS policy_chunks (
                     ) STORED
 );
 
--- K32: databases created before the status column get it here; the next seed sets the real value.
+-- Databases created before the status column get it here; the next seed sets the real value.
 ALTER TABLE policy_chunks
     ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'berlaku' CHECK (status IN ('berlaku', 'arsip'));
 
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS traces (
 
 CREATE INDEX IF NOT EXISTS traces_created_at_idx ON traces (created_at);
 
--- K26: the days taken at confirmation go back when the HR system cancels the request.
+-- The days taken at confirmation go back when the HR system cancels the request.
 -- Only requests made through the assistant (proposal_id set) were ever deducted here;
 -- seeded history was not, so it is never refunded. hr_api cannot change status at all.
 CREATE OR REPLACE FUNCTION refund_cancelled_leave() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -223,7 +223,7 @@ def parse_front_matter(lines: list[str], path: Path) -> tuple[dict[str, str], li
     return meta, lines[end + 1 :]
 
 
-# K9 option C: what the API account may do. Anything not listed is denied by PostgreSQL itself.
+# What the API account may do. Anything not listed is denied by PostgreSQL itself.
 API_GRANTS = """
 GRANT USAGE ON SCHEMA public TO {role};
 REVOKE ALL ON employees, leave_balances, action_proposals, leave_requests,
@@ -231,7 +231,7 @@ REVOKE ALL ON employees, leave_balances, action_proposals, leave_requests,
 GRANT SELECT ON employees, leave_balances, policy_chunks TO {role};
 GRANT SELECT, INSERT ON action_proposals, leave_requests, traces TO {role};
 GRANT UPDATE (confirmed_at) ON action_proposals TO {role};
-GRANT UPDATE (available_days) ON leave_balances TO {role};  -- K26: lowering only, see the trigger
+GRANT UPDATE (available_days) ON leave_balances TO {role};  -- lowering only, see the trigger
 GRANT INSERT ON hr_tickets TO {role};
 
 -- Row-level security: a second guard under the WHERE clauses in repository.py. The repository
@@ -342,7 +342,7 @@ def drop_tables(conn: psycopg.Connection) -> None:
 def seed_employees(conn: psycopg.Connection, employees: list[dict[str, Any]], as_of: date) -> None:
     """Upsert identities; insert balances only when missing.
 
-    K26: confirmations deduct from the stored balance, so after the first seed the database,
+    Confirmations deduct from the stored balance, so after the first seed the database,
     not the JSON file, is the source of truth for balances. --reset restores the JSON values.
     """
     for row in employees:
@@ -413,7 +413,7 @@ def seed_historical_requests(conn: psycopg.Connection, requests: list[dict[str, 
 def load_policy_chunks(policy_dir: Path | None = None) -> list[dict[str, str]]:
     """Every chunk of every policy file, in a stable order.
 
-    K32: two files may never produce the same chunk_id. An archived version kept next to the
+    Two files may never produce the same chunk_id. An archived version kept next to the
     current one with the same document_id would otherwise overwrite it in the upsert, silently.
     An archived version needs its own document_id.
     """
@@ -434,7 +434,7 @@ def load_policy_chunks(policy_dir: Path | None = None) -> list[dict[str, str]]:
 def seed_policies(conn: psycopg.Connection) -> None:
     """Make policy_chunks match data/policies exactly.
 
-    - New or changed sections are upserted, including their status (K32).
+    - New or changed sections are upserted, including their status.
     - A section whose content changed loses its embedding (set to NULL), so it is re-embedded
       instead of answering with a vector of the old text.
     - Sections that no longer exist in the files are deleted.

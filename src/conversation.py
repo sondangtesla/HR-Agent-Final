@@ -1,4 +1,4 @@
-"""Short conversation memory and pending HR ticket drafts (K25).
+"""Short conversation memory and pending HR ticket drafts.
 
 Both live only in Redis with a short TTL. Nothing here reaches PostgreSQL or the trace, and
 callers store text that is already redacted.

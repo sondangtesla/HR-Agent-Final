@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     model_timeout_seconds: float = Field(default=30.0, ge=1, le=120)
     proposal_ttl_minutes: int = Field(default=15, ge=1, le=60)
     retrieval_cache_ttl_seconds: int = Field(default=900, ge=0, le=86400)
-    # K34: "enforce" abstains when an answer states a number no evidence of the run contains;
+    # "enforce" abstains when an answer states a number no evidence of the run contains;
     # "shadow" only records it in the trace (to measure false alarms before enforcing).
     answer_number_check: Literal["enforce", "shadow"] = "enforce"
     input_cost_per_1m: float | None = Field(default=None, ge=0)
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     @property
     def api_database_url(self) -> str:
         """Login for the API process: same server and database as DATABASE_URL, but the
-        least-privilege account created by setup_lab (K9 option C). DATABASE_URL itself
+        least-privilege account created by setup_lab. DATABASE_URL itself
         (hr_app, superuser) is used only by setup_lab."""
         return make_conninfo(self.database_url, user=self.api_db_user, password=self.api_db_password)
 

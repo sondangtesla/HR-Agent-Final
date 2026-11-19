@@ -52,7 +52,7 @@ def select_persona(state: dict, persona: dict[str, str]) -> None:
 
 
 def current_conversation_id(state: dict) -> str:
-    """One conversation per browser session (T2).
+    """One conversation per browser session.
 
     The API keeps short memory and ticket drafts per (employee from the token, conversation_id),
     so a second browser tab of the same persona gets its own: a "ya" typed there can never send

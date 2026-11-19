@@ -63,7 +63,7 @@ def build_runtime(settings: Settings) -> Runtime:
         index_version=settings.policy_index_version,
     )
     tools = ToolExecutor(repository, retrieval, settings)
-    # Memory and ticket drafts (K25) share the Redis client; if Redis dies, no ticket can be sent.
+    # Memory and ticket drafts share the Redis client; if Redis dies, no ticket can be sent.
     agent = AgentService(repository, provider, tools, settings, conversation=ConversationStore(cache))
     return Runtime(repository, cache, provider, agent)
 

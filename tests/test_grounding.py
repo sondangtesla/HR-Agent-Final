@@ -1,4 +1,4 @@
-"""K34: numbers in an answer must come from evidence the run actually saw."""
+"""Numbers in an answer must come from evidence the run actually saw."""
 from __future__ import annotations
 
 import pytest
@@ -53,7 +53,7 @@ def test_the_same_number_in_digits_or_words_is_supported() -> None:
     assert unsupported_numbers("Paling lambat tiga hari kerja.", ["paling lambat 3 hari kerja"]) == []
 
 
-# --- K34 follow-up: the number must sit in a clause that resembles the policy clause carrying it ---
+# --- The number must sit in a clause that resembles the policy clause carrying it ---
 
 def test_a_number_swapped_between_two_facts_is_a_context_mismatch() -> None:
     """12 is a real number of this policy (the annual allowance), but the clause is about the notice period (3)."""

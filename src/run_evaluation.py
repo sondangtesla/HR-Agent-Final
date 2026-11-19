@@ -26,7 +26,7 @@ from .monitoring import p95
 ROOT = Path(__file__).resolve().parents[1]
 CASES_PATH = ROOT / "data" / "evaluation_cases.json"
 REGRESSION_PATH = ROOT / "evaluation" / "regression_cases.json"
-# K34: facts a correct answer must state, per case_id. Kept apart from the supplied cases file.
+# Facts a correct answer must state, per case_id. Kept apart from the supplied cases file.
 REQUIRED_FACTS_PATH = ROOT / "evaluation" / "required_facts.json"
 OUTPUT_DIR = ROOT / "outputs"
 
@@ -89,7 +89,7 @@ def _check(checks: list[dict[str, Any]], name: str, passed: bool, detail: str = 
 
 
 def missing_facts(answer: str, facts: list[str]) -> list[str]:
-    """Required facts the answer does not state (K34).
+    """Required facts the answer does not state.
 
     A number matches as a value, written in digits or words ("5" = "lima"). Text matches as a
     whole word, case-insensitive. Citations and IDs do not count: "[HR-LEAVE-001]" never states "HR".
@@ -114,7 +114,7 @@ def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[dat
     substitution = None
     expected_tools = case.get("expected_tools", [])
 
-    # Dates: fill templates (regression cases) or move stale dates into the future (K1).
+    # Dates: fill templates (regression cases) or move stale dates into the future.
     if "{start}" in message:
         window = case["leave_window"]
         start_from = today + timedelta(days=1) if window["leave_type"] == "sick" else earliest_start_with_notice(today)
@@ -127,10 +127,10 @@ def evaluate_case(client: ApiClient, case: dict[str, Any], taken: list[tuple[dat
         start, end = free_window(taken, earliest_start_with_notice(today), 2)
         taken.append((start, end))
         used = DATE_RANGE.sub(f"{start.isoformat()} sampai {end.isoformat()}", message)
-        substitution = {"original": message, "used": used, "reason": "K1: original dates are in the past"}
+        substitution = {"original": message, "used": used, "reason": "original dates are in the past"}
         message = used
 
-    # K25: every case runs in its own conversation, so short memory from an earlier case can
+    # Every case runs in its own conversation, so short memory from an earlier case can
     # never change this one's answer, tokens, or latency. Setup belongs to the same case.
     conversation_id = f"eval-{case['case_id']}-{uuid.uuid4().hex[:8]}"
 

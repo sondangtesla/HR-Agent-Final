@@ -44,7 +44,7 @@ _PHONE = re.compile(r"(?<![\w+])(?:\+62[\s-]?|62|0)8\d(?:[\s.-]?\d){7,11}(?!\d)"
 # Medical detail after a word that introduces a diagnosis: "diagnosis: diabetes.", "menderita GERD".
 # The mask stops at the end of that part of the sentence: . ; , new line, or a word that starts
 # the request. "didiagnosis hipertensi, jadi mau cuti 2026-11-12" keeps "jadi mau cuti 2026-11-12",
-# so the leave request and its date still reach the agent (K33).
+# so the leave request and its date still reach the agent.
 _MEDICAL_TRIGGERS = (
     r"diagnosis|diagnosa|didiagnosis|didiagnosa|penyakit(?:nya)?|riwayat medis|kondisi medis|hasil lab|"
     r"menderita|mengidap|terjangkit"
@@ -54,12 +54,11 @@ _MEDICAL_AFTER_TRIGGER = re.compile(
     rf"(?i)\b({_MEDICAL_TRIGGERS})(\s*[:=-]?\s*)(?:(?!\s*\b(?:{_REQUEST_START})\b)[^.,;\n])+"
 )
 # Condition names that are sensitive on their own. "sakit" is NOT here: "cuti sakit" is a leave type.
-# A list is never complete: an unlisted condition without a trigger word still passes (R-010).
+# A list is never complete: an unlisted condition without a trigger word still passes.
 _MEDICAL_TERMS = re.compile(
     r"(?i)\b(diabetes|hipertensi|kanker|asma|tbc|tuberkulosis|hiv|aids|hepatitis|covid(?:-19)?|"
     r"depresi|bipolar|skizofrenia|stroke|epilepsi|demam berdarah|dbd|tifus|tipes|migrain|"
     r"gagal ginjal|serangan jantung|"
-    # K33
     r"vertigo|gerd|maag|asam lambung|asam urat|kolesterol|anemia|tifoid|sinusitis|bronkitis|"
     r"pneumonia|cacar|campak|kista|tumor|usus buntu|patah tulang|gegar otak|insomnia|hernia|"
     r"osteoporosis|katarak|glaukoma|leukemia|lupus|gangguan kecemasan|gangguan mental|gangguan jiwa|"

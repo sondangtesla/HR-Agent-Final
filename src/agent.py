@@ -121,7 +121,7 @@ TICKET_CATEGORY_LABELS = {
 
 
 def ticket_draft_text(draft: dict[str, str]) -> str:
-    """Written by code, not by the model: the user confirms exactly what will be stored (K25)."""
+    """Written by code, not by the model: the user confirms exactly what will be stored."""
     return (
         "Draf tiket HR (BELUM dikirim):\n"
         f"- Kategori: {TICKET_CATEGORY_LABELS.get(draft['category'], draft['category'])}\n"
@@ -195,9 +195,9 @@ class AgentService:
         self.provider = provider
         self.tools = tools
         self.settings = settings
-        # K25: short memory and ticket drafts. None: no memory, and no ticket can be drafted or sent.
+        # Short memory and ticket drafts. None: no memory, and no ticket can be drafted or sent.
         self.conversation = conversation
-        # K30: LangChain create_agent runs the model/tool loop. Compiled once, shared by every run.
+        # LangChain create_agent runs the model/tool loop. Compiled once, shared by every run.
         self.graph = build_agent(provider, tools, settings)
 
     def run(self, request: ChatRequest, auth: AuthContext) -> ChatResponse:
@@ -212,7 +212,7 @@ class AgentService:
         # The employee always comes from the token; conversation_id only separates their own chats.
         scope = conversation_scope(auth.employee_id, request.conversation_id)
 
-        # K25: a pending ticket draft is sent ONLY here, by code, and only when the whole
+        # A pending ticket draft is sent ONLY here, by code, and only when the whole
         # message is an explicit yes. The model is not asked, so it cannot be talked into it.
         # Any other message drops the draft: a later "ya" can never send an old draft.
         dropped_draft = None
@@ -227,7 +227,7 @@ class AgentService:
         today = self.tools.today_factory().isoformat()
         instructions = SYSTEM_INSTRUCTIONS.format(today=today, display_name=auth.display_name)
         if auth.role == "manager":
-            # The department comes from the token, like display_name (R-014).
+            # The department comes from the token, like display_name.
             instructions += MANAGER_INSTRUCTIONS.format(department=auth.department or "tidak diketahui")
         if dropped_draft is not None:
             # Without this the model may tell the user the draft is "being processed".
@@ -237,7 +237,7 @@ class AgentService:
             safety_identifier=stable_safety_id(auth.employee_id), deadline=deadline,
         )
         # store=False: the whole conversation is resent every turn, built from these messages.
-        # Short memory (K25) comes first: already redacted, without tool content.
+        # Short memory comes first: already redacted, without tool content.
         history = conversation.history(scope) if conversation is not None else []
         messages = [*history_messages(history), HumanMessage(content=message)]
 
@@ -245,7 +245,7 @@ class AgentService:
         stop_reason: str | None = None
         error: str | None = None
         try:
-            # K30: prompts never go to LangSmith, even if a developer's shell turns tracing on.
+            # Prompts never go to LangSmith, even if a developer's shell turns tracing on.
             with tracing_context(enabled=False):
                 result = self.graph.invoke({"messages": messages}, context=run, config=RUN_CONFIG)
             last = result["messages"][-1]
@@ -259,7 +259,7 @@ class AgentService:
             stop_reason = "provider_error"
             error = f"{type(failure.original).__name__}: {redact(str(failure.original))}"
         retrieved, proposal, ticket_draft = run.retrieved, run.proposal, run.ticket_draft
-        # K34: every number the model states must appear in something this run saw.
+        # Every number the model states must appear in something this run saw.
         evidence = [message, *(item["content"] for item in history), *run.tool_outputs]
         unsupported = unsupported_numbers(final_text.replace(today, ""), evidence) if final_text else []
         policy_texts = [chunk["excerpt"] for chunks in run.retrieved.values() for chunk in chunks]
@@ -298,7 +298,7 @@ class AgentService:
                 # explains why; the outcome says honestly that nothing was done.
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_blocked"
             elif is_leave_action_request(request.message) and not team_answered:
-                # K28: a leave request for a date ended without a proposal. The model asked back
+                # A leave request for a date ended without a proposal. The model asked back
                 # or searched instead of calling the tool (live: 5 of 10 runs for a past date).
                 # Nothing was done, so the outcome says so, whatever the text says.
                 outcome, answer, stop_reason = Outcome.abstained, final_text, "action_not_performed"
@@ -307,7 +307,7 @@ class AgentService:
             elif run.searched and not citations and not team_answered:
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_NO_EVIDENCE, "no_citation"
             elif unsupported and s.answer_number_check == "enforce":
-                # K34: e.g. "15 hari [HR-LEAVE-001]" when the document says 12. The citation is
+                # E.g. "15 hari [HR-LEAVE-001]" when the document says 12. The citation is
                 # valid, the number is not. The valid citations stay, so the user can read the source.
                 outcome, answer, stop_reason = Outcome.abstained, ABSTAIN_UNSUPPORTED_NUMBER, "unsupported_number"
             else:
@@ -332,7 +332,7 @@ class AgentService:
     def _send_confirmed_ticket(
         self, draft: dict[str, str], message: str, auth: AuthContext, scope: str, trace_id: str, started: float
     ) -> ChatResponse:
-        """Insert exactly the draft the user saw. Called only after an explicit yes (K25)."""
+        """Insert exactly the draft the user saw. Called only after an explicit yes."""
         tool_started = time.perf_counter()
         try:
             ticket_id = self.repository.create_ticket(auth.employee_id, draft["category"], draft["summary"])
@@ -376,18 +376,18 @@ class AgentService:
             "stop_reason": stop_reason,
             "turns": turns,
             "tool_calls": [summary.model_dump() for summary in tool_summaries],
-            # K30: the model asked for more than 6 tools; the extra calls were refused, the run went on.
+            # The model asked for more than 6 tools; the extra calls were refused, the run went on.
             "tool_limit_reached": tool_limit_reached,
-            # K34: numbers the model stated without evidence (also recorded in "shadow" mode).
+            # Numbers the model stated without evidence (also recorded in "shadow" mode).
             "unsupported_numbers": unsupported_numbers or [],
-            # K34 follow-up (shadow): numbers taken from the wrong policy clause; recorded, never blocks.
+            # Shadow mode: numbers taken from the wrong policy clause; recorded, never blocks.
             "number_context_mismatch": number_context_mismatch or [],
             "retrieved_documents": retrieved,
             "search_rankings": search_rankings,
             "cited_documents": [c.document_id for c in citations],
             "proposal_id": proposal.proposal_id if proposal else None,
             "usage": usage.model_dump(),
-            # Where the time went (T17): model calls vs tool calls; the rest is our own overhead.
+            # Where the time went: model calls vs tool calls; the rest is our own overhead.
             "timings": timings,
             "error": error,
             "model_mode": s.model_mode,

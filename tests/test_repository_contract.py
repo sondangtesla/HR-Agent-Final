@@ -128,7 +128,7 @@ def test_demo_tokens_authenticate(repo) -> None:
 
 
 def test_authenticate_returns_the_department(repo) -> None:
-    """R-014: the department travels with the identity, like role."""
+    """The department travels with the identity, like role."""
     assert repo.authenticate("token-sari").department == "Engineering"
     assert repo.authenticate("token-dewi").department == "Finance"
     assert repo.authenticate("token-admin").department is None
@@ -141,7 +141,7 @@ def test_balances_belong_to_one_employee(repo) -> None:
     assert repo.get_balances("ADM-001") == []
 
 
-# --- Pending days (information only) and K26 deduction ---
+# --- Pending days (information only) and balance deduction ---
 
 def test_pending_days_count_only_pending_requests_of_that_employee(repo) -> None:
     add_request(repo, A, "TEST-P1", "annual", date(2026, 10, 5), date(2026, 10, 9), 5, "pending_manager_review")
@@ -160,7 +160,7 @@ def annual_balance(repo, employee_id: str = A) -> int:
 
 
 def test_confirmed_days_are_deducted_so_the_next_validation_sees_them(repo) -> None:
-    """K26: balance 8, a 5-day request confirmed -> stored balance 3; a new 5-day request fails."""
+    """Balance 8, a 5-day request confirmed -> stored balance 3; a new 5-day request fails."""
     repo.save_proposal(A, make_proposal("AP-TEST-P1", start=date(2026, 10, 5), end=date(2026, 10, 9), days=5))
     repo.confirm_proposal(A, "AP-TEST-P1", "key-test-0100")
     assert annual_balance(repo) == 3
@@ -265,7 +265,7 @@ def test_ticket_summary_is_redacted_when_stored(repo) -> None:
     assert "alya@example.com" not in summary and "diabetes" not in summary
 
 
-# --- Step 8: confirmation boundary ---
+# --- Confirmation boundary ---
 
 def test_confirm_creates_one_pending_request_and_replays(repo) -> None:
     repo.save_proposal(A, make_proposal("AP-TEST-C1"))
@@ -276,7 +276,7 @@ def test_confirm_creates_one_pending_request_and_replays(repo) -> None:
     assert again.audit_reference == first.audit_reference
     mine = [r for r in repo.list_leave_requests(A) if r.request_id == first.request_id]
     assert len(mine) == 1 and mine[0].status == "pending_manager_review"
-    assert annual_balance(repo) == 8 - 2  # K26: deducted once; the replay does not deduct again
+    assert annual_balance(repo) == 8 - 2  # deducted once; the replay does not deduct again
 
 
 def test_confirm_rejects_other_owner_other_key_and_reused_key(repo) -> None:
@@ -310,7 +310,7 @@ def test_expired_proposal_creates_nothing_but_a_retry_after_success_still_replay
 
 
 def test_balance_is_checked_again_at_confirmation(repo) -> None:
-    """Two 5-day proposals made while the balance was 8: the deduction allows only one (K26)."""
+    """Two 5-day proposals made while the balance was 8: the deduction allows only one."""
     repo.save_proposal(A, make_proposal("AP-TEST-K1", start=date(2026, 10, 5), end=date(2026, 10, 9), days=5))
     repo.save_proposal(A, make_proposal("AP-TEST-K2", start=date(2026, 10, 19), end=date(2026, 10, 23), days=5))
     repo.confirm_proposal(A, "AP-TEST-K1", "key-test-0006")
@@ -369,7 +369,7 @@ def test_parallel_double_click_creates_one_request(repo) -> None:
     assert annual_balance(repo) == 8 - 2  # one request, one deduction
 
 
-# --- K32: only policies in force can be retrieved ---
+# --- Only policies in force can be retrieved ---
 
 def test_search_skips_archived_and_future_policies(repo) -> None:
     """Three chunks share a made-up word and the same vector; only the one in force may come back."""
@@ -377,7 +377,7 @@ def test_search_skips_archived_and_future_policies(repo) -> None:
     dimensions = get_settings().embedding_dimensions
     vector = [1.0] + [0.0] * (dimensions - 1)
     chunks = [
-        PolicyChunk(chunk_id=f"TEST-K32-{name}", document_id=f"TEST-K32-{name}", title="Uji", section="Uji",
+        PolicyChunk(chunk_id=f"TEST-STATUS-{name}", document_id=f"TEST-STATUS-{name}", title="Uji", section="Uji",
                     version="1.0", effective_date=effective, content=f"{word} {name}", status=status)
         for name, status, effective in (
             ("now", "berlaku", date(2026, 1, 1)),
@@ -398,16 +398,16 @@ def test_search_skips_archived_and_future_policies(repo) -> None:
             )
     try:
         lexical = [c.chunk_id for c in repo.lexical_search(word, 10, TODAY)]
-        semantic = [c.chunk_id for c in repo.vector_search(vector, 10, TODAY) if c.chunk_id.startswith("TEST-K32")]
-        assert lexical == ["TEST-K32-now"]
-        assert semantic == ["TEST-K32-now"]
+        semantic = [c.chunk_id for c in repo.vector_search(vector, 10, TODAY) if c.chunk_id.startswith("TEST-STATUS")]
+        assert lexical == ["TEST-STATUS-now"]
+        assert semantic == ["TEST-STATUS-now"]
     finally:
         if not isinstance(repo, MemoryRepository):
-            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-K32-%%'")
+            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-STATUS-%%'")
 
 
 def test_index_status_counts_the_policies_that_search_can_use(repo) -> None:
-    """T13: readiness must read what search reads, so an old schema cannot look ready.
+    """Readiness must read what search reads, so an old schema cannot look ready.
 
     `active_chunks` counts rows with status 'berlaku'. One chunk in force and one archived are added, so
     `active_chunks` must grow by exactly 1 while `chunks` grows by 2. Deltas, because PostgreSQL already
@@ -415,12 +415,12 @@ def test_index_status_counts_the_policies_that_search_can_use(repo) -> None:
     """
     vector = [1.0] + [0.0] * (get_settings().embedding_dimensions - 1)
     chunks = [
-        PolicyChunk(chunk_id=f"TEST-T13-{name}", document_id=f"TEST-T13-{name}", title="Uji", section="Uji",
+        PolicyChunk(chunk_id=f"TEST-SCHEMA-{name}", document_id=f"TEST-SCHEMA-{name}", title="Uji", section="Uji",
                     version="1.0", effective_date=date(2026, 1, 1), content=f"uji {name}", status=status)
         for name, status in (("now", "berlaku"), ("old", "arsip"))
     ]
     before = repo.index_status()
-    assert "active_chunks" in before, "index_status() must report active_chunks (T13)"
+    assert "active_chunks" in before, "index_status() must report active_chunks"
     if isinstance(repo, MemoryRepository):
         repo.chunks = [*repo.chunks, *chunks]
         repo.embeddings = {**repo.embeddings, **{c.chunk_id: vector for c in chunks}}
@@ -438,4 +438,4 @@ def test_index_status_counts_the_policies_that_search_can_use(repo) -> None:
         assert after["active_chunks"] - before["active_chunks"] == 1
     finally:
         if not isinstance(repo, MemoryRepository):
-            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-T13-%%'")
+            admin_execute("DELETE FROM policy_chunks WHERE chunk_id LIKE 'TEST-SCHEMA-%%'")

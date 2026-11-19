@@ -64,7 +64,7 @@ class ResilientCache:
 
     def set(self, key: str, value: Any, ttl_seconds: int) -> bool:
         """Store a value. Returns False when it was not stored, so callers that must not
-        continue without it (ticket drafts, K25) can fail closed."""
+        continue without it (ticket drafts) can fail closed."""
         if not self._available() or ttl_seconds <= 0:
             return False
         try:

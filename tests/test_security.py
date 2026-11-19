@@ -56,7 +56,7 @@ def test_normal_hr_text_is_not_changed(text: str) -> None:
     assert redact(text) == text
 
 
-# --- K33: wider medical redaction, tested in both directions ---
+# --- Wider medical redaction, tested in both directions ---
 
 @pytest.mark.parametrize(
     ("text", "hidden"),
@@ -87,7 +87,7 @@ def test_wider_medical_detail_is_masked(text: str, hidden: str) -> None:
     ],
 )
 def test_the_request_after_medical_detail_still_reaches_the_agent(text: str, kept: str) -> None:
-    """Before K33 the mask ran to the period and swallowed the leave request and its date."""
+    """The old mask ran to the period and swallowed the leave request and its date."""
     assert kept in redact(text)
 
 

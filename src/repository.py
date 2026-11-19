@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 CHUNK_COLUMNS = "chunk_id, document_id, title, section, version, effective_date, content, status"
-# K32: retrieval only ever sees policies in force: this status, and effective_date on or before the day asked.
+# Retrieval only ever sees policies in force: this status, and effective_date on or before the day asked.
 ACTIVE_POLICY_STATUS = "berlaku"
 
 
@@ -69,7 +69,7 @@ def insufficient_balance_message(leave_type: str, requested: int, available: int
 
 
 def to_pgvector(vector: list[float]) -> str:
-    # No pgvector Python package (T8): send the '[x,y,...]' text form and cast with ::vector.
+    # No pgvector Python package: send the '[x,y,...]' text form and cast with ::vector.
     return "[" + ",".join(str(float(value)) for value in vector) + "]"
 
 
@@ -127,7 +127,7 @@ class MemoryRepository:
         self.requests: list[tuple[str, LeaveRequestView]] = []
         self.tickets: list[dict[str, Any]] = []
         self.traces: dict[str, dict[str, Any]] = {}
-        # Mirrors UNIQUE(proposal_id) and UNIQUE(employee_id, idempotency_key) from the schema (K9).
+        # Mirrors UNIQUE(proposal_id) and UNIQUE(employee_id, idempotency_key) from the schema.
         self.confirmations: dict[str, tuple[str, str]] = {}  # proposal_id -> (request_id, key)
         self.keys: dict[tuple[str, str], str] = {}  # (employee_id, key) -> proposal_id
         self._lock = threading.Lock()  # stands in for the PostgreSQL row/advisory locks
@@ -260,7 +260,7 @@ class MemoryRepository:
                 raise ConflictError(EXPIRED_MESSAGE)
             if self.has_overlap(employee_id, proposal.start_date, proposal.end_date):
                 raise ConflictError("Tanggal bertumpang tindih dengan permintaan cuti yang masih aktif.")
-            # K26: deduct the stored balance, as the conditional UPDATE does in PostgreSQL.
+            # Deduct the stored balance, as the conditional UPDATE does in PostgreSQL.
             balances = self.balances.get(employee_id, [])
             index = next((i for i, b in enumerate(balances) if b.leave_type == proposal.leave_type), None)
             available = balances[index].available_days if index is not None else 0
@@ -375,7 +375,7 @@ class PostgresRepository:
         websearch_to_tsquery joins words with AND, so "jatah cuti tahunan" finds nothing
         because no policy contains "jatah". OR keeps the chunks that match some words,
         and ts_rank puts the ones matching more words first. The status/date filter sits in
-        WHERE, so it runs before ORDER BY and LIMIT: an archived chunk can never take a slot (K32).
+        WHERE, so it runs before ORDER BY and LIMIT: an archived chunk can never take a slot.
         """
         terms = tokenize(query)
         if not terms:
@@ -538,14 +538,14 @@ class PostgresRepository:
 
         Order (each step can end the call):
           1. per-employee advisory lock: two different proposals of the same employee cannot
-             pass the balance check at the same time (K8)
+             pass the balance check at the same time
           2. row lock on the proposal; unknown or someone else's -> KeyError (API: 404)
           3. already confirmed: same key -> replay of the same request; other key -> conflict
           4. key already used for another proposal -> conflict
           5. expired -> conflict. Checked AFTER idempotency, so a retry of a confirm that
              succeeded still gets its answer even if the proposal expired since.
           6. overlap checked again: other requests may exist by now
-          7. K26: deduct the balance with ONE conditional UPDATE (no read-then-write race);
+          7. Deduct the balance with ONE conditional UPDATE (no read-then-write race);
              0 rows means not enough days -> conflict, and the whole transaction rolls back
           8. insert pending_manager_review (status_set_by='assistant'), mark proposal confirmed
         """

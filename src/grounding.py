@@ -1,6 +1,6 @@
-"""Numbers in an answer must come from this run's evidence (K34, T9).
+"""Numbers in an answer must come from this run's evidence.
 
-Citation validation (K20) proves WHICH document an answer used, not WHAT it says: "Cuti tahunan
+Citation validation proves WHICH document an answer used, not WHAT it says: "Cuti tahunan
 15 hari [HR-LEAVE-001]" passes it although the document says 12. HR answers go wrong in their
 numbers (days, dates, limits), so every number the model writes must appear in something this run
 actually saw: the user's message, the short memory, today's date, or a tool output. A number that

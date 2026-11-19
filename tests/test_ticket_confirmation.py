@@ -1,4 +1,4 @@
-"""K25: an HR ticket is never empty, and reaches the database only after an explicit yes.
+"""An HR ticket is never empty, and reaches the database only after an explicit yes.
 
 The tool only drafts. The insert is done by code at the start of the NEXT run, when the whole
 user message is an explicit confirmation. The model is not consulted for that decision.

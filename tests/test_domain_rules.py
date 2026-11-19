@@ -1,4 +1,4 @@
-"""Extra domain rules beyond the mentor's tests: K3 notice period, weekends, cost.
+"""Extra domain rules beyond the mentor's tests: notice period, weekends, cost.
 
 All dates use the frozen "today" of the suite: Wednesday 2026-09-23.
 """
@@ -30,7 +30,7 @@ def validate(start: date, end: date, leave_type: str = "annual") -> tuple[int, l
     return validate_leave_request(args, BALANCES, False, TODAY)
 
 
-# --- K28: what counts as a request to prepare leave ---
+# --- What counts as a request to prepare leave ---
 
 @pytest.mark.parametrize("message", [
     "Ajukan cuti tahunan 2025-01-02",
@@ -52,7 +52,7 @@ def test_not_leave_action_requests(message: str) -> None:
     assert not is_leave_action_request(message)
 
 
-# --- K27: messages name the leave type in Indonesian, never the code ---
+# --- Messages name the leave type in Indonesian, never the code ---
 
 @pytest.mark.parametrize("leave_type,name", [("annual", "tahunan"), ("sick", "sakit"), ("parental", "orang tua")])
 def test_messages_use_the_indonesian_leave_type(leave_type: str, name: str) -> None:
@@ -64,7 +64,7 @@ def test_messages_use_the_indonesian_leave_type(leave_type: str, name: str) -> N
         validate_leave_request(too_long, [b.model_copy(update={"available_days": 1}) for b in BALANCES], False, TODAY)
 
 
-# --- K3: annual leave needs 3 business days of notice; the submission day counts ---
+# --- Annual leave needs 3 business days of notice; the submission day counts ---
 
 def test_annual_leave_on_monday_after_wednesday_submission_is_allowed() -> None:
     days, summary = validate(date(2026, 9, 28), date(2026, 9, 28))
@@ -109,7 +109,7 @@ def test_missing_balance_type_is_rejected() -> None:
         validate_leave_request(args, only_annual, False, TODAY)
 
 
-# --- T7: rule versions must follow the policy documents ---
+# --- Rule versions must follow the policy documents ---
 
 def test_rule_policy_versions_match_policy_documents() -> None:
     """If HR publishes a new policy version, this fails until the rules are reviewed."""

@@ -76,7 +76,7 @@ def test_good_policy_answer_passes() -> None:
 
 
 def test_every_case_runs_in_its_own_conversation() -> None:
-    """K25: short memory from one case must never reach the next (answers, tokens, latency)."""
+    """Short memory from one case must never reach the next (answers, tokens, latency)."""
     api = FakeApi(chat(tools=[("search_hr_policy", "ok")], citations=["HR-LEAVE-001"]),
                   trace(["HR-LEAVE-001"], [["HR-LEAVE-001"]]))
     evaluate_case(api, POLICY_CASE, [], TODAY, [])
@@ -108,7 +108,7 @@ def test_forbidden_fact_in_answer_or_trace_fails() -> None:
     assert {"forbidden fact absent: EMP-002", "forbidden fact absent: diabetes"} <= failed_checks(result)
 
 
-# --- K34: a correct answer must state the required facts ---
+# --- A correct answer must state the required facts ---
 
 def test_a_wrong_number_with_the_right_citation_fails_the_required_fact() -> None:
     case = {**POLICY_CASE, "required_facts": ["12"]}
@@ -146,7 +146,7 @@ def test_missing_tool_and_wrong_outcome_fail() -> None:
             "expected_tools": ["prepare_leave_request"], "hard_gate": True}
     result = evaluate_case(FakeApi(chat(outcome="answered"), trace()), case, [], TODAY, [])
     assert {"tool selection", "outcome"} <= failed_checks(result)
-    assert result["date_substitution"]["used"] != case["input"]  # K1: stale dates moved forward
+    assert result["date_substitution"]["used"] != case["input"]  # stale dates moved forward
 
 
 def test_approved_or_unconfirmed_request_makes_the_run_no_go(tmp_path: Path) -> None:

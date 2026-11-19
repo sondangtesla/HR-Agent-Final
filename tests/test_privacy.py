@@ -1,4 +1,4 @@
-"""Step 9: sensitive data enters through every door and must not come out of any.
+"""Sensitive data enters through every door and must not come out of any.
 
 Doors in:  chat message, proposal reason, ticket summary, provider error text.
 Doors out: answer, trace, what the provider receives, and everything stored.
@@ -119,7 +119,7 @@ def test_pii_written_by_the_model_into_tools_is_masked_when_stored(repository: M
     draft = ticket_agent.run(ChatRequest(message="buat tiket"), ALYA)
     assert_no_secrets(draft.answer, "the ticket draft shown to the user")
     assert_no_secrets(json.dumps(memory._values, ensure_ascii=False), "Redis draft and memory")
-    ticket_agent.run(ChatRequest(message="ya"), ALYA)  # K25: stored only after an explicit yes
+    ticket_agent.run(ChatRequest(message="ya"), ALYA)  # stored only after an explicit yes
 
     assert repository.proposals and repository.tickets
     assert_no_secrets(everything_stored(repository), "stored proposals and tickets")
@@ -140,7 +140,7 @@ def test_provider_error_text_is_masked_in_trace(repository: MemoryRepository) ->
 
 
 def test_trace_has_every_required_field_and_nothing_raw(repository: MemoryRepository) -> None:
-    """lab.md Step 9: trace ID, outcome, retrieved document IDs, tool name/status/duration,
+    """Trace ID, outcome, retrieved document IDs, tool name/status/duration,
     latency, token, optional cost, redacted error. No prompt, no chain-of-thought."""
     response = make_agent(repository, DeterministicProvider()).run(
         ChatRequest(message="Berapa jatah cuti tahunan?"), ALYA

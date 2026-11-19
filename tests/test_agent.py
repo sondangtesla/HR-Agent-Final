@@ -71,7 +71,7 @@ def test_turn_limit_stops_a_model_that_never_answers(repository: MemoryRepositor
 
 
 def test_tool_call_limit_runs_six_then_lets_the_model_answer(repository: MemoryRepository) -> None:
-    """K30, "continue" mode: six calls run, the seventh is refused, and the model may still answer."""
+    """"continue" mode: six calls run, the seventh is refused, and the model may still answer."""
     seven = [search_call(f"c{i}") for i in range(7)]
     provider = ScriptedProvider([tool_turn(seven), text_turn("Hak cuti 12 hari. [HR-LEAVE-001]")])
     response = make_agent(repository, provider).run(ChatRequest(message="cuti"), ALYA)
@@ -99,7 +99,7 @@ def test_time_budget_stops_the_loop(repository: MemoryRepository) -> None:
     assert repository.get_trace(response.trace_id)["stop_reason"] == "timeout"
 
 
-# --- LangChain loop (K30): what the framework must not change ---
+# --- LangChain loop: what the framework must not change ---
 
 def test_turn_limit_message_of_langchain_never_reaches_the_user(repository: MemoryRepository) -> None:
     # Balance, not search: without a search no other rule replaces the answer, so only
@@ -124,7 +124,7 @@ def test_injected_identity_argument_is_refused_not_dropped(repository: MemoryRep
     assert "employee_id" in output
 
 
-# --- K34: numbers must come from this run's evidence ---
+# --- Numbers must come from this run's evidence ---
 
 def test_a_wrong_number_behind_a_valid_citation_is_not_shown(repository: MemoryRepository) -> None:
     provider = ScriptedProvider([tool_turn([search_call()]), text_turn("Cuti tahunan 15 hari kerja. [HR-LEAVE-001]")])
@@ -164,7 +164,7 @@ def test_a_tool_name_the_model_made_up_is_refused_and_recorded(repository: Memor
     assert [(c.name, c.status) for c in response.tool_calls] == [("approve_leave", "error")]
 
 
-# --- T14: a search that FAILED is not the same as "no search needed" ---
+# --- A search that FAILED is not the same as "no search needed" ---
 
 def _break_search(repository: MemoryRepository) -> None:
     def boom(*args, **kwargs):
@@ -206,7 +206,7 @@ def test_a_search_that_failed_once_but_worked_on_retry_is_answered(repository: M
     assert [c.document_id for c in response.citations] == ["HR-LEAVE-001"]
 
 
-# --- K34 follow-up: today's date is evidence only as a whole date, never as loose numbers ---
+# --- Today's date is evidence only as a whole date, never as loose numbers ---
 
 def test_a_number_that_only_matches_part_of_todays_date_is_not_accepted(repository: MemoryRepository) -> None:
     """make_agent() freezes today at 2026-09-23. "23" is in no policy, balance, or question."""
@@ -227,7 +227,7 @@ def test_todays_full_date_can_still_be_written_in_the_answer(repository: MemoryR
     assert repository.get_trace(response.trace_id)["unsupported_numbers"] == []
 
 
-# --- K34 follow-up (shadow): a number taken from the wrong policy clause is recorded, not blocked ---
+# --- Shadow mode: a number taken from the wrong policy clause is recorded, not blocked ---
 
 def test_a_number_from_the_wrong_policy_clause_is_recorded_but_not_blocked(repository: MemoryRepository) -> None:
     """Measure first, enforce later: the trace gets `number_context_mismatch`, the outcome stays `answered`."""
@@ -314,7 +314,7 @@ def test_blocked_leave_request_is_reported_as_abstained(repository: MemoryReposi
 
 
 def test_leave_request_the_model_did_not_carry_out_is_abstained(repository: MemoryRepository) -> None:
-    """K28, live finding: in 5 of 10 runs the model skipped the tool for a past date and asked
+    """Live finding: in 5 of 10 runs the model skipped the tool for a past date and asked
     back or searched policy instead. Nothing was proposed, so the outcome must not be "answered"."""
     asked_back = ScriptedProvider([text_turn("Tanggal itu sudah lewat. Tanggal mulai yang Anda maksud kapan?")])
     response = make_agent(repository, asked_back).run(ChatRequest(message="Ajukan cuti tahunan 2025-01-02"), ALYA)
@@ -361,7 +361,7 @@ def test_only_a_manager_gets_the_team_rules_in_the_prompt(repository: MemoryRepo
     instructions = manager.calls[0]["instructions"]
     assert instructions.startswith(SYSTEM_INSTRUCTIONS.format(today="2026-09-23", display_name="Sari Wijaya"))
     assert "MANAJER" in instructions and "get_team_leave_analytics" in instructions
-    assert "manajer departemen Engineering" in instructions  # rule 13, department from the token (R-014)
+    assert "manajer departemen Engineering" in instructions  # rule 13, department from the token
 
 
 def test_a_managers_dated_team_question_is_answered_not_abstained(repository: MemoryRepository) -> None:
@@ -443,7 +443,7 @@ def test_trace_keeps_no_prompt_or_answer(repository: MemoryRepository) -> None:
 
 
 def test_a_model_run_never_inserts_a_ticket(repository: MemoryRepository) -> None:
-    """K25: even two tool calls in one run only (re)write the draft; nothing reaches the database."""
+    """Even two tool calls in one run only (re)write the draft; nothing reaches the database."""
     ticket = ModelToolCall(call_id="t1", name="create_hr_ticket",
                            arguments={"category": "policy_question", "summary": "Saldo cuti tahunan saya tercatat salah"})
     again = ticket.model_copy(update={"call_id": "t2"})

@@ -110,7 +110,7 @@ def test_readiness_fails_when_database_is_down(repository: MemoryRepository, set
 
 def test_readiness_fails_when_the_policy_table_has_an_old_schema(repository: MemoryRepository,
                                                                   client: TestClient) -> None:
-    """T13: a database seeded before K32 has no `status` column, so every search fails.
+    """A database seeded before policies had a status has no `status` column, so every search fails.
 
     The database answers and the table has rows, so /readyz used to say `ready`. The new index check reads
     the same columns as search; on an old schema PostgreSQL raises UndefinedColumn. The label

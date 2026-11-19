@@ -254,7 +254,7 @@ class ToolExecutor:
             return error("Layanan sedang bermasalah. Coba lagi nanti atau buat tiket HR.")
 
     def _search_hr_policy(self, args: SearchPolicyArgs, auth: AuthContext) -> ToolResult:
-        # Same clock as the leave rules, so "in force today" and "today" never disagree (K32).
+        # Same clock as the leave rules, so "in force today" and "today" never disagree.
         chunks = self.retrieval.search(args.query, args.top_k, as_of=self.today_factory())
         return {
             "status": "ok",
@@ -273,7 +273,7 @@ class ToolExecutor:
         }, None
 
     def _get_my_leave_balance(self, auth: AuthContext) -> ToolResult:
-        """K26: confirmed requests are already deducted from the stored balance, so what can be
+        """Confirmed requests are already deducted from the stored balance, so what can be
         requested IS the stored balance. Pending days are shown only as information."""
         balances = self.repository.get_balances(auth.employee_id)
         pending = self.repository.get_pending_days(auth.employee_id)
@@ -294,7 +294,7 @@ class ToolExecutor:
 
     def _prepare_leave_request(self, args: PrepareLeaveArgs, auth: AuthContext) -> ToolResult:
         employee_id = auth.employee_id
-        balances = self.repository.get_balances(employee_id)  # K26: already net of confirmed requests
+        balances = self.repository.get_balances(employee_id)  # already net of confirmed requests
         overlaps = self.repository.has_overlap(employee_id, args.start_date, args.end_date)
         try:
             days, summary = validate_leave_request(args, balances, overlaps, self.today_factory())
@@ -302,7 +302,7 @@ class ToolExecutor:
             return blocked(str(exc))
 
         proposal = ActionProposal(
-            proposal_id="AP-" + uuid.uuid4().hex,  # K11: made by the backend, never by the model
+            proposal_id="AP-" + uuid.uuid4().hex,  # made by the backend, never by the model
             leave_type=args.leave_type,
             start_date=args.start_date,
             end_date=args.end_date,
@@ -323,7 +323,7 @@ class ToolExecutor:
         }, proposal
 
     def _create_hr_ticket(self, args: TicketArgs, auth: AuthContext) -> ToolResult:
-        """K25: only ever a DRAFT. The insert happens in AgentService, by code, after the user
+        """Only ever a DRAFT. The insert happens in AgentService, by code, after the user
         answers the draft with an explicit confirmation in a later message."""
         problem = ticket_summary_problem(args.summary)
         if problem:
@@ -367,5 +367,5 @@ class ToolExecutor:
 
     def _with_team_department(self, result: dict[str, Any], auth: AuthContext) -> dict[str, Any]:
         """Name the team's department, so a question about another department is not answered
-        with this team's rows (R-014). The department comes from the token, like the team."""
+        with this team's rows. The department comes from the token, like the team."""
         return {**result, "team_department": auth.department}

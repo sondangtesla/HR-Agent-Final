@@ -1,4 +1,4 @@
-"""The agent loop, run by LangChain create_agent (K30).
+"""The agent loop, run by LangChain create_agent.
 
 LangChain does the loop: call the model, run the tools it asks for, send the results back, and
 repeat until the model answers with text. What stays ours:
@@ -50,7 +50,7 @@ class AgentRun:
 
     auth: AuthContext
     scope: str
-    conversation: ConversationStore | None  # memory and ticket drafts of this scope (K25)
+    conversation: ConversationStore | None  # memory and ticket drafts of this scope
     instructions: str
     safety_identifier: str
     deadline: float
@@ -64,7 +64,7 @@ class AgentRun:
     tool_summaries: list[ToolCallSummary] = field(default_factory=list)
     retrieved: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     search_rankings: list[list[str]] = field(default_factory=list)  # document IDs per search (recall@k)
-    tool_outputs: list[str] = field(default_factory=list)  # what the model saw from tools (K34 evidence)
+    tool_outputs: list[str] = field(default_factory=list)  # what the model saw from tools (number evidence)
     searched: bool = False
     search_failed: bool = False
     action_refused: bool = False
@@ -201,7 +201,7 @@ def build_agent(provider: ModelProvider, executor: ToolExecutor, settings: Setti
 
 
 def history_messages(history: list[dict[str, str]]) -> list[HumanMessage | AIMessage]:
-    """Short memory from Redis (K25) as LangChain messages."""
+    """Short memory from Redis as LangChain messages."""
     return [
         HumanMessage(content=item["content"]) if item["role"] == "user" else AIMessage(content=item["content"])
         for item in history

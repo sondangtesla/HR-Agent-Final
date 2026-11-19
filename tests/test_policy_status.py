@@ -1,4 +1,4 @@
-"""K32: retrieval only ever sees policies in force (status "berlaku", effective_date reached)."""
+"""Retrieval only ever sees policies in force (status "berlaku", effective_date reached)."""
 from __future__ import annotations
 
 from datetime import date

@@ -39,7 +39,7 @@ class RetrievalService:
     def cache_key(self, query: str, top_k: int, as_of: date | None = None) -> str:
         """The index version is part of the key, so a reindex never serves old chunks.
 
-        The day is part of it too (K32): a policy that comes into force today is never hidden
+        The day is part of it too: a policy that comes into force today is never hidden
         behind yesterday's cached result. The query is hashed: the key stays short and raw user
         text never lands in Redis keys.
         """

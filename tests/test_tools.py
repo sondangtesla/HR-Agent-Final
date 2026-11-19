@@ -27,7 +27,7 @@ def tools(repository: MemoryRepository) -> ToolExecutor:
 
 
 def add_pending(repository: MemoryRepository, employee_id: str, days: int) -> None:
-    """A confirmed request waiting for the manager. K26: confirming already took the days."""
+    """A confirmed request waiting for the manager. Confirming already took the days."""
     repository.requests.append((employee_id, LeaveRequestView(
         request_id=f"LR-PENDING-{employee_id}", leave_type="annual",
         start_date=date(2026, 11, 2), end_date=date(2026, 11, 2) + timedelta(days=days - 1),
@@ -76,7 +76,7 @@ def test_balance_shows_own_data_with_pending_breakdown(tools: ToolExecutor, repo
     add_pending(repository, "EMP-002", 1)  # Bima's request must not touch Alya's numbers
     result, _ = tools.execute("get_my_leave_balance", {}, ALYA)
     annual = next(b for b in result["balances"] if b["leave_type"] == "annual")
-    assert annual == {  # K26: 8 at the start, 5 already deducted at confirmation
+    assert annual == {  # 8 at the start, 5 already deducted at confirmation
         "leave_type": "annual",
         "balance_days": 3,
         "pending_manager_review_days": 5,
@@ -104,7 +104,7 @@ def test_valid_request_creates_only_a_proposal(tools: ToolExecutor, repository: 
 
 
 def test_confirmed_days_are_not_available_again(tools: ToolExecutor, repository: MemoryRepository) -> None:
-    add_pending(repository, "EMP-001", 5)  # K26: stored balance is now 8 - 5 = 3
+    add_pending(repository, "EMP-001", 5)  # stored balance is now 8 - 5 = 3
     result, proposal = tools.execute(
         "prepare_leave_request",
         {"start_date": "2026-10-05", "end_date": "2026-10-09", "leave_type": "annual", "reason": None},
@@ -155,7 +155,7 @@ def test_search_marks_documents_as_untrusted_data(tools: ToolExecutor) -> None:
 
 
 def test_ticket_tool_only_returns_a_draft(tools: ToolExecutor, repository: MemoryRepository) -> None:
-    """K25: the tool validates and returns a redacted draft; it never inserts a ticket.
+    """The tool validates and returns a redacted draft; it never inserts a ticket.
     Storing the draft and sending it are the agent's job (tests/test_ticket_confirmation.py)."""
     result, _ = tools.execute(
         "create_hr_ticket", {"category": "leave_exception", "summary": "Minta pengecualian sisa cuti"}, ALYA
@@ -302,7 +302,7 @@ def test_team_results_show_names_only(tools: ToolExecutor, team: MemoryRepositor
 
 
 def test_team_results_name_the_managers_department(tools: ToolExecutor, team: MemoryRepository) -> None:
-    """R-014: the model must know which department the rows belong to, for every metric."""
+    """The model must know which department the rows belong to, for every metric."""
     for auth, department in ((SARI, "Engineering"), (DEWI, "Finance")):
         results = [
             team_call(tools, auth, "team_absence", "2026-12-01", "2026-12-31"),
